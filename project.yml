@@ -1,0 +1,36 @@
+name: Agy
+options:
+  bundleIdPrefix: cc.nooh
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+packages:
+  SwiftMath:
+    url: https://github.com/mgriebling/SwiftMath
+    from: 1.7.3
+
+targets:
+  Agy:
+    type: application
+    platform: iOS
+    sources:
+      - path: Agy
+    dependencies:
+      - package: SwiftMath
+        product: SwiftMath
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: cc.nooh.agy.native
+        PRODUCT_NAME: Agy
+        INFOPLIST_FILE: Agy/Info.plist
+        SWIFT_VERSION: "5.9"
+        TARGETED_DEVICE_FAMILY: "1"
+        MARKETING_VERSION: "2.0.0"
+        CURRENT_PROJECT_VERSION: "1"
+        CODE_SIGN_IDENTITY: ""
+        CODE_SIGNING_REQUIRED: "NO"
+        CODE_SIGNING_ALLOWED: "NO"
+        ENABLE_BITCODE: "NO"
+        SUPPORTS_MACCATALYST: "NO"

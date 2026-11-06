@@ -1,0 +1,216 @@
+import Foundation
+import UIKit
+
+enum APIError: LocalizedError {
+    case unauthorized
+    case server(String)
+    case decoding(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .unauthorized: return "登录已过期，请重新登录"
+        case .server(let m): return m
+        case .decoding(let m): return "数据解析失败：\(m)"
+        }
+    }
+}
+
+final class APIClient {
+    static let shared = APIClient()
+
+    var baseURL = URL(string: "https://agy.nooh.cc")!
+    private(set) var token: String?
+
+    private let session: URLSession
+    private let decoder: JSONDecoder
+
+    init() {
+        let cfg = URLSessionConfiguration.default
+        cfg.timeoutIntervalForRequest = 60
+        cfg.timeoutIntervalForResource = 1800
+        cfg.waitsForConnectivity = true
+        session = URLSession(configuration: cfg)
+        decoder = JSONDecoder()
+        token = UserDefaults.standard.string(forKey: "agy_token")
+    }
+
+    var isLoggedIn: Bool { (token?.isEmpty == false) }
+
+    func setToken(_ t: String?) {
+        token = t
+        UserDefaults.standard.set(t, forKey: "agy_token")
+    }
+
+    // MARK: - 基础请求
+
+    private func makeRequest(_ path: String, method: String = "GET", body: Data? = nil) -> URLRequest {
+        var req = URLRequest(url: baseURL.appendingPathComponent(path))
+        req.httpMethod = method
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let t = token, !t.isEmpty {
+            req.setValue("Bearer \(t)", forHTTPHeaderField: "Authorization")
+        }
+        req.httpBody = body
+        return req
+    }
+
+    private func send<T: Decodable>(_ path: String, method: String = "GET", body: Data? = nil, as type: T.Type) async throws -> T {
+        let req = makeRequest(path, method: method, body: body)
+        let (data, resp) = try await session.data(for: req)
+        guard let http = resp as? HTTPURLResponse else { throw APIError.server("无响应") }
+        if http.statusCode == 401 { throw APIError.unauthorized }
+        if http.statusCode >= 400 {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw APIError.server(msg.isEmpty ? "HTTP \(http.statusCode)" : msg)
+        }
+        do {
+            return try decoder.decode(T.self, from: data)
+        } catch {
+            throw APIError.decoding(error.localizedDescription)
+        }
+    }
+
+    // MARK: - 登录
+
+    func login(password: String) async throws -> String {
+        let body = try JSONSerialization.data(withJSONObject: ["password": password])
+        struct Resp: Decodable { let token: String?; let error: String? }
+        let r = try await send("api/login", method: "POST", body: body, as: Resp.self)
+        guard let t = r.token else { throw APIError.server(r.error ?? "密码错误") }
+        setToken(t)
+        return t
+    }
+
+    func checkSession() async -> Bool {
+        struct Resp: Decodable { let ok: Bool? }
+        guard isLoggedIn else { return false }
+        do {
+            let r = try await send("api/session", as: Resp.self)
+            return r.ok == true
+        } catch {
+            return false
+        }
+    }
+
+    // MARK: - 会话
+
+    func tasks() async throws -> [Session] {
+        try await send("api/tasks", as: [Session].self)
+    }
+
+    func replay(_ id: String) async throws -> [ChatEvent] {
+        try await send("api/replay/\(id)", as: [ChatEvent].self)
+    }
+
+    func run(prompt: String, model: String?, conversationId: String?, sessionId: String?) async throws -> (id: String, conversationId: String?) {
+        var payload: [String: Any] = ["prompt": prompt]
+        if let m = model { payload["model"] = m }
+        if let c = conversationId { payload["conversation_id"] = c }
+        if let s = sessionId { payload["session_id"] = s }
+        let body = try JSONSerialization.data(withJSONObject: payload)
+        let r = try await send("api/run", method: "POST", body: body, as: RunResponse.self)
+        guard let id = r.id else { throw APIError.server(r.error ?? "任务创建失败") }
+        return (id, r.conversationId)
+    }
+
+    func stop(_ taskId: String) async {
+        _ = try? await send("api/tasks/\(taskId)/stop", method: "POST", body: Data("{}".utf8), as: EmptyResponse.self)
+    }
+
+    func deleteSession(_ id: String) async {
+        _ = try? await send("api/tasks/\(id)", method: "DELETE", as: EmptyResponse.self)
+    }
+
+    func truncateFrom(_ taskId: String) async -> Bool {
+        struct Resp: Decodable { let ok: Bool?; let dropped_conversation: Bool? }
+        guard let r = try? await send("api/tasks/\(taskId)/from", method: "DELETE", as: Resp.self) else { return false }
+        return r.dropped_conversation == true
+    }
+
+    // MARK: - 配额 / 技能
+
+    func quota() async throws -> QuotaResponse {
+        try await send("api/quota", as: QuotaResponse.self)
+    }
+
+    func skills() async throws -> [Skill] {
+        try await send("api/skills", as: [Skill].self)
+    }
+
+    func deleteSkill(_ name: String) async {
+        _ = try? await send("api/skills/\(name)", method: "DELETE", as: EmptyResponse.self)
+    }
+
+    // MARK: - 上传
+
+    func upload(name: String, data: Data) async throws -> String {
+        let b64 = data.base64EncodedString()
+        let payload: [String: Any] = ["name": name, "data": "data:application/octet-stream;base64,\(b64)"]
+        let body = try JSONSerialization.data(withJSONObject: payload)
+        let r = try await send("api/upload", method: "POST", body: body, as: UploadResponse.self)
+        guard let p = r.path else { throw APIError.server(r.error ?? "上传失败") }
+        return p
+    }
+
+    // MARK: - 图片
+
+    private var imageCache = NSCache<NSString, UIImage>()
+
+    func imageURL(path: String) -> URL? {
+        var comp = URLComponents(url: baseURL.appendingPathComponent("api/file"), resolvingAgainstBaseURL: false)
+        comp?.queryItems = [URLQueryItem(name: "path", value: path)]
+        return comp?.url
+    }
+
+    func loadImage(path: String) async -> UIImage? {
+        let key = path as NSString
+        if let cached = imageCache.object(forKey: key) { return cached }
+        guard let url = imageURL(path: path) else { return nil }
+        var req = URLRequest(url: url)
+        if let t = token { req.setValue("Bearer \(t)", forHTTPHeaderField: "Authorization") }
+        guard let (data, resp) = try? await session.data(for: req),
+              let http = resp as? HTTPURLResponse, http.statusCode == 200,
+              let img = UIImage(data: data) else { return nil }
+        imageCache.setObject(img, forKey: key)
+        return img
+    }
+
+    // MARK: - SSE
+
+    /// 订阅任务事件流，逐条回调。自动处理 meta/init/text/tool/usage/end。
+    func stream(taskId: String,
+                onEvent: @escaping (ChatEvent) -> Void,
+                onClose: @escaping () -> Void) -> Task<Void, Never>? {
+        guard var comp = URLComponents(url: baseURL.appendingPathComponent("api/stream/\(taskId)"), resolvingAgainstBaseURL: false) else { return nil }
+        if let t = token { comp.queryItems = [URLQueryItem(name: "token", value: t)] }
+        guard let url = comp.url else { return nil }
+
+        var req = URLRequest(url: url)
+        req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+
+        return Task { [weak self] in
+            guard let self else { return }
+            do {
+                let (bytes, resp) = try await self.session.bytes(for: req)
+                guard let http = resp as? HTTPURLResponse, http.statusCode == 200 else {
+                    onClose(); return
+                }
+                for try await line in bytes.lines {
+                    if Task.isCancelled { break }
+                    guard line.hasPrefix("data:") else { continue }
+                    let json = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
+                    guard let data = json.data(using: .utf8) else { continue }
+                    if let ev = try? JSONDecoder().decode(ChatEvent.self, from: data) {
+                        onEvent(ev)
+                        if ev.type == "end" { break }
+                    }
+                }
+            } catch {
+                // 网络中断 / 取消
+            }
+            onClose()
+        }
+    }
+}
+
+struct EmptyResponse: Decodable {}

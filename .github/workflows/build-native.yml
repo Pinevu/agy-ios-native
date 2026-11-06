@@ -1,0 +1,65 @@
+name: Build Native IPA
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'Agy/**'
+      - 'project.yml'
+      - '.github/workflows/build-native.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Resolve packages
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project Agy.xcodeproj \
+            -scheme Agy 2>&1 | tail -20
+
+      - name: Build
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project Agy.xcodeproj \
+            -scheme Agy \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee build.log | tail -60
+
+      - name: Package IPA
+        run: |
+          mkdir -p Payload
+          cp -r build/Build/Products/Release-iphoneos/Agy.app Payload/
+          zip -r -9 AgyNative.ipa Payload
+          ls -lh AgyNative.ipa
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Agy-Native-IPA
+          path: AgyNative.ipa
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Build-Log
+          path: build.log
+          if-no-files-found: ignore
