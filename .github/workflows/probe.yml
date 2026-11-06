@@ -1,8 +1,21 @@
-name: Probe Linux
+name: Swift Syntax Check
 on:
   workflow_dispatch:
 jobs:
-  probe:
+  parse:
     runs-on: ubuntu-latest
+    container: swift:5.9
     steps:
-      - run: echo hello && uname -a
+      - uses: actions/checkout@v4
+      - name: Parse all Swift files
+        run: |
+          set -e
+          fail=0
+          for f in $(find Agy -name '*.swift'); do
+            echo "=== $f"
+            if ! swiftc -parse "$f" 2>err.txt; then
+              cat err.txt; fail=1
+            fi
+          done
+          echo "PARSE_RESULT=$fail"
+          exit $fail
