@@ -1,0 +1,8 @@
+name: Mac Probe2
+on:
+  workflow_dispatch:
+jobs:
+  hello:
+    runs-on: macos-14
+    steps:
+      - run: echo hi && sw_vers
