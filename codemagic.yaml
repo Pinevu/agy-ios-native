@@ -1,0 +1,57 @@
+workflows:
+  ios-unsigned:
+    name: agy 原生 iOS（免签 IPA）
+    instance_type: mac_mini_m2
+    max_build_duration: 30
+    environment:
+      xcode: latest
+      vars:
+        SCHEME: Agy
+    scripts:
+      - name: 安装 XcodeGen
+        script: |
+          brew install xcodegen || true
+          xcodegen --version
+
+      - name: 生成工程
+        script: |
+          cd $CM_BUILD_DIR
+          xcodegen generate
+
+      - name: 解析依赖
+        script: |
+          cd $CM_BUILD_DIR
+          xcodebuild -resolvePackageDependencies -project Agy.xcodeproj -scheme "$SCHEME" || true
+
+      - name: 编译
+        script: |
+          cd $CM_BUILD_DIR
+          xcodebuild build \
+            -project Agy.xcodeproj \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: 打包 IPA
+        script: |
+          cd $CM_BUILD_DIR
+          mkdir -p Payload
+          cp -r build/Build/Products/Release-iphoneos/Agy.app Payload/
+          zip -r -9 AgyNative.ipa Payload
+          ls -lh AgyNative.ipa
+
+    artifacts:
+      - AgyNative.ipa
+      - build/build.log
+
+    publishing:
+      email:
+        recipients:
+          - linvvvy@gmail.com
+        notify:
+          success: true
+          failure: true
