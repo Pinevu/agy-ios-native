@@ -63,6 +63,19 @@ private struct KaTeXWebView: UIViewRepresentable {
                          baseURL: Bundle.main.resourceURL)
     }
 
+    /// 资源被拍平到 Bundle 根目录，这里读文件并修正字体相对路径
+    static var css: String = {
+        guard let url = Bundle.main.url(forResource: "katex.min", withExtension: "css"),
+              let raw = try? String(contentsOf: url, encoding: .utf8) else { return "" }
+        return raw.replacingOccurrences(of: "fonts/", with: "")
+    }()
+
+    static var js: String = {
+        guard let url = Bundle.main.url(forResource: "katex.min", withExtension: "js"),
+              let raw = try? String(contentsOf: url, encoding: .utf8) else { return "" }
+        return raw
+    }()
+
     static func html(latex: String, display: Bool, fontSize: CGFloat) -> String {
         let escaped = latex
             .replacingOccurrences(of: "\\", with: "\\\\")
@@ -73,7 +86,7 @@ private struct KaTeXWebView: UIViewRepresentable {
         return """
         <!doctype html><html><head><meta charset="utf-8">
         <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-        <link rel="stylesheet" href="katex/katex.min.css">
+        <style>\(Self.css)</style>
         <style>
           html,body{margin:0;padding:0;background:transparent;color:\(color);}
           body{font-size:\(Int(fontSize))px;line-height:1.45;
@@ -82,7 +95,7 @@ private struct KaTeXWebView: UIViewRepresentable {
           .katex{font-size:\(Int(fontSize))px;}
           .err{font-family:ui-monospace,monospace;font-size:\(Int(fontSize - 1))px;color:#8E8E96;white-space:pre-wrap;}
         </style>
-        <script src="katex/katex.min.js"></script>
+        <script>\(Self.js)</script>
         <script>
         function post(){ window.webkit.messageHandlers.size.postMessage(
             Math.ceil(document.body.scrollHeight)); }
