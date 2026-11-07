@@ -31,7 +31,10 @@ func looksLikeMath(_ tex: String) -> Bool {
     let t = tex.trimmingCharacters(in: .whitespacesAndNewlines)
     if t.isEmpty || t.count > 240 { return false }
     // 中文/日文出现在公式里几乎都是误判
-    if t.range(of: "[\u4e00-\u9fff\u3040-\u30ff]", options: .regularExpression) != nil { return false }
+    for sc in t.unicodeScalars {
+        let v = sc.value
+        if (0x4E00...0x9FFF).contains(v) || (0x3040...0x30FF).contains(v) { return false }
+    }
     // 括号必须配对，否则渲染器可能直接崩
     if t.filter({ $0 == "{" }).count != t.filter({ $0 == "}" }).count { return false }
     if t.contains("\\begin") && !t.contains("\\end") { return false }

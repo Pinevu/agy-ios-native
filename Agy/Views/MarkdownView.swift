@@ -112,13 +112,13 @@ struct Callout {
         let kind = String(first.dropFirst(2).dropLast()).uppercased()
         guard ["TIP", "NOTE", "WARNING", "IMPORTANT", "CAUTION"].contains(kind) else { return nil }
 
-        var rest = lines.dropFirst().map { $0 }
+        var rest: [String] = Array(lines.dropFirst())
         var title: String? = nil
         if let f = rest.first {
             let ft = f.trimmingCharacters(in: .whitespaces)
             if !ft.isEmpty, ft.hasSuffix("：") || ft.hasSuffix(":") {
                 title = String(ft.dropLast())
-                rest = rest.dropFirst()
+                rest.removeFirst()
             }
         }
         let body = rest.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
