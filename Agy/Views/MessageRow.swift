@@ -3,37 +3,13 @@ import UIKit
 
 struct MessageRow: View {
     let item: ChatItem
+    /// 点击铅笔/长按「编辑后重发」
+    var onEdit: ((ChatItem) -> Void)? = nil
 
     var body: some View {
         switch item.kind {
         case .user(let text, let attachments):
-            HStack {
-                Spacer(minLength: 40)
-                VStack(alignment: .trailing, spacing: 6) {
-                    if !attachments.isEmpty {
-                        ForEach(Array(attachments.enumerated()), id: \.offset) { _, data in
-                            if let img = UIImage(data: data) {
-                                Image(uiImage: img)
-                                    .resizable()
-                                    .scaledToFit()
-                                    .frame(maxWidth: 200)
-                                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                            }
-                        }
-                    }
-                    if !text.isEmpty {
-                        Text(text)
-                            .font(.system(size: 15.5))
-                            .textSelection(.enabled)
-                            .padding(.horizontal, 13)
-                            .padding(.vertical, 9)
-                            .background(Color.accentColor.opacity(0.13))
-                            .foregroundStyle(.primary)
-                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .trailing)
+            userBubble(text: text, attachments: attachments)
 
         case .assistant(let text):
             MarkdownView(text: text)
@@ -83,6 +59,75 @@ struct MessageRow: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    // MARK: - 用户气泡
+
+    @ViewBuilder
+    private func userBubble(text: String, attachments: [Data]) -> some View {
+        VStack(alignment: .trailing, spacing: 5) {
+            if !attachments.isEmpty {
+                ForEach(Array(attachments.enumerated()), id: \.offset) { _, data in
+                    if let img = UIImage(data: data) {
+                        Image(uiImage: img)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: 190)
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    }
+                }
+            }
+
+            if !text.isEmpty {
+                HStack(alignment: .bottom, spacing: 6) {
+                    Spacer(minLength: 44)
+
+                    Text(text)
+                        .font(.system(size: 15.5))
+                        .textSelection(.enabled)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .fill(Color.accentColor.opacity(0.14))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .stroke(Color.accentColor.opacity(0.18), lineWidth: 0.7)
+                        )
+
+                    if onEdit != nil {
+                        Button {
+                            onEdit?(item)
+                        } label: {
+                            Image(systemName: "pencil")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 26, height: 26)
+                                .background(Color(.secondarySystemBackground))
+                                .clipShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.bottom, 2)
+                    }
+                }
+                .contextMenu {
+                    Button {
+                        UIPasteboard.general.string = text
+                    } label: {
+                        Label("复制", systemImage: "doc.on.doc")
+                    }
+                    if onEdit != nil {
+                        Button {
+                            onEdit?(item)
+                        } label: {
+                            Label("编辑后重发", systemImage: "pencil")
+                        }
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
     }
 }
 
@@ -137,7 +182,7 @@ struct ToolCardView: View {
             .buttonStyle(.plain)
 
             if expanded {
-                Divider()
+                Divider().opacity(0.5)
                 VStack(alignment: .leading, spacing: 8) {
                     if !input.isEmpty {
                         sectionLabel("参数")
@@ -158,10 +203,10 @@ struct ToolCardView: View {
             }
         }
         .background(Color(.secondarySystemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .stroke(Color(.separator).opacity(0.35), lineWidth: 0.6)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color(.separator).opacity(0.28), lineWidth: 0.6)
         )
     }
 

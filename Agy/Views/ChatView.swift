@@ -13,6 +13,8 @@ struct ChatView: View {
     @State private var showPhotoPicker = false
     @State private var showFileImporter = false
     @FocusState private var inputFocused: Bool
+    @State private var editingItem: ChatItem?
+    @State private var editingText = ""
 
     var body: some View {
         ZStack(alignment: .trailing) {
@@ -54,6 +56,24 @@ struct ChatView: View {
         .animation(.easeInOut(duration: 0.2), value: state.toast)
         .sheet(isPresented: $showModelPicker) { modelSheet }
         .sheet(isPresented: $showQuota) { QuotaSheet() }
+        .sheet(item: $editingItem) { it in
+            EditMessageSheet(
+                original: it.rawText ?? {
+                    if case .user(let t, _) = it.kind { return t }
+                    return ""
+                }(),
+                onCancel: { editingItem = nil },
+                onSubmit: { newText in
+                    editingItem = nil
+                    Task {
+                        inputFocused = false
+                        await state.editAndResend(itemId: it.id, newText: newText)
+                    }
+                }
+            )
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
         .confirmationDialog("添加附件", isPresented: $showAttach, titleVisibility: .visible) {
             Button("照片图库") { showPhotoPicker = true }
             Button("文件") { showFileImporter = true }
@@ -153,6 +173,15 @@ struct ChatView: View {
         .buttonStyle(.plain)
     }
 
+    private func openEditor(for item: ChatItem) {
+        guard !state.isRunning else {
+            state.showToast("请先等当前任务结束或停止")
+            return
+        }
+        editingText = item.rawText ?? ""
+        editingItem = item
+    }
+
     private func toggleAppearance() {
         guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
               let win = scene.windows.first else { return }
@@ -173,8 +202,10 @@ struct ChatView: View {
                         emptyState
                     }
                     ForEach(state.items) { item in
-                        MessageRow(item: item)
-                            .id(item.id)
+                        MessageRow(item: item) { it in
+                            openEditor(for: it)
+                        }
+                        .id(item.id)
                     }
                     if state.isRunning {
                         HStack(spacing: 7) {
@@ -269,6 +300,44 @@ struct ChatView: View {
                 }
             }
 
+            // 工具条
+            HStack(spacing: 8) {
+                Button { showModelPicker = true } label: {
+                    HStack(spacing: 5) {
+                        Circle().fill(Color.accentColor).frame(width: 6, height: 6)
+                        Text(state.currentModelName)
+                            .font(.system(size: 12.5))
+                            .lineLimit(1)
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 8, weight: .semibold))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .padding(.horizontal, 10)
+                    .frame(height: 30)
+                    .background(Color(.secondarySystemBackground))
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+                .buttonStyle(.plain)
+
+                Button { showQuota = true } label: {
+                    HStack(spacing: 5) {
+                        Circle().fill(Color.green).frame(width: 6, height: 6)
+                        Text("配额")
+                            .font(.system(size: 12.5))
+                    }
+                    .padding(.horizontal, 10)
+                    .frame(height: 30)
+                    .background(Color(.secondarySystemBackground))
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+                .buttonStyle(.plain)
+
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+            .padding(.bottom, 6)
+
             HStack(alignment: .bottom, spacing: 8) {
                 Button { showAttach = true } label: {
                     Image(systemName: "plus")
@@ -311,44 +380,8 @@ struct ChatView: View {
                     .stroke(inputFocused ? Color.accentColor : Color.clear, lineWidth: 1)
             )
             .padding(.horizontal, 12)
+            .padding(.bottom, 8)
 
-            // 工具条
-            HStack(spacing: 8) {
-                Button { showModelPicker = true } label: {
-                    HStack(spacing: 5) {
-                        Circle().fill(Color.accentColor).frame(width: 6, height: 6)
-                        Text(state.currentModelName)
-                            .font(.system(size: 12.5))
-                            .lineLimit(1)
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 8, weight: .semibold))
-                            .foregroundStyle(.tertiary)
-                    }
-                    .padding(.horizontal, 10)
-                    .frame(height: 30)
-                    .background(Color(.secondarySystemBackground))
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                }
-                .buttonStyle(.plain)
-
-                Button { showQuota = true } label: {
-                    HStack(spacing: 5) {
-                        Circle().fill(Color.green).frame(width: 6, height: 6)
-                        Text("配额")
-                            .font(.system(size: 12.5))
-                    }
-                    .padding(.horizontal, 10)
-                    .frame(height: 30)
-                    .background(Color(.secondarySystemBackground))
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                }
-                .buttonStyle(.plain)
-
-                Spacer()
-            }
-            .padding(.horizontal, 12)
-            .padding(.top, 7)
-            .padding(.bottom, 4)
         }
         .background(Color(.systemBackground))
         .overlay(alignment: .top) { Divider().opacity(0.4) }

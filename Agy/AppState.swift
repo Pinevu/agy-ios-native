@@ -159,7 +159,10 @@ final class AppState: ObservableObject {
         attachments = []
 
         // 本地先插入用户气泡
-        items.append(ChatItem(kind: .user(text: text, attachments: localAttachments)))
+        let bubbleId = UUID()
+        items.append(ChatItem(id: bubbleId,
+                              kind: .user(text: text, attachments: localAttachments),
+                              rawText: text))
         assistantIndex = nil
 
         do {
@@ -169,11 +172,42 @@ final class AppState: ObservableObject {
                                       sessionId: currentSession?.id)
             runningTaskId = r.id
             if let c = r.conversationId { conversationId = c }
+            // 回填任务 id，编辑重发时才知道从哪截断
+            if let idx = items.firstIndex(where: { $0.id == bubbleId }) {
+                items[idx].taskId = r.id
+            }
             isRunning = true
             listen(taskId: r.id)
         } catch {
             items.append(ChatItem(kind: .error(text: error.localizedDescription)))
         }
+    }
+
+    /// 编辑某条用户消息并覆盖重发：物理删除服务端对应轮次 → 本地截掉后半段 → 重新发送
+    func editAndResend(itemId: UUID, newText: String) async {
+        guard !isRunning else { showToast("请先等当前任务结束或停止"); return }
+        guard let idx = items.firstIndex(where: { $0.id == itemId }) else { return }
+        let target = items[idx]
+        let trimmed = newText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        // 1) 服务端真删（含 agy 会话 SQLite 对应轮次）
+        if let tid = target.taskId {
+            let dropped = await api.truncateFrom(tid)
+            if dropped {
+                // 首轮被编辑 → 整个 agy 会话已销毁，断开续接
+                conversationId = nil
+                currentSession = nil
+            }
+        }
+
+        // 2) 本地砍掉这条及其之后的所有内容
+        items.removeSubrange(idx..<items.count)
+        assistantIndex = nil
+
+        // 3) 用新文本重新发送
+        draft = newText
+        await send()
     }
 
     func stop() async {
@@ -263,7 +297,10 @@ final class AppState: ObservableObject {
         for ev in events {
             switch ev.type {
             case "user_input":
-                items.append(ChatItem(kind: .user(text: ev.prompt ?? "", attachments: [])))
+                let raw = ev.prompt ?? ""
+                items.append(ChatItem(kind: .user(text: raw, attachments: []),
+                                      taskId: ev.taskId,
+                                      rawText: raw))
                 assistantIndex = nil
             case "text":
                 guard let t = ev.text, !t.isEmpty else { continue }

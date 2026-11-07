@@ -160,6 +160,10 @@ enum ChatItemKind {
 }
 
 struct ChatItem: Identifiable {
-    let id = UUID()
+    var id = UUID()
     var kind: ChatItemKind
+    /// 产生这条消息的任务 id（用户气泡才有，用于「编辑后重发」时截断服务端上下文）
+    var taskId: String? = nil
+    /// 原文（不含附件路径），编辑时回填
+    var rawText: String? = nil
 }
