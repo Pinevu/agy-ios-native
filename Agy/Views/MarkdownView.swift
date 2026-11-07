@@ -169,21 +169,48 @@ struct CalloutView: View {
     }
 }
 
-/// 段落：文字 + 行内公式 + 图片混排
+/// 段落：行内富文本（粗体 / 行内代码）连续排版，含公式或图片时才拆块
 struct ParagraphView: View {
     let text: String
 
     private var segs: [InlineSeg] { InlineParser.parse(text) }
 
+    private var needsFlow: Bool {
+        segs.contains { seg in
+            switch seg {
+            case .math, .image: return true
+            case .text: return false
+            }
+        }
+    }
+
+    private var attributed: AttributedString {
+        var out = AttributedString()
+        for seg in segs {
+            guard case .text(let t, let bold, let code) = seg else { continue }
+            var a = AttributedString(t)
+            if code {
+                a.font = .system(size: 14.5, design: .monospaced)
+                a.foregroundColor = .accentColor
+                a.backgroundColor = Color(.secondarySystemBackground)
+            } else {
+                a.font = .system(size: 16, weight: bold ? .semibold : .regular)
+            }
+            out.append(a)
+        }
+        return out
+    }
+
     var body: some View {
-        if segs.contains(where: { if case .math = $0 { return true }; return false }) {
+        if needsFlow {
             FlowLayout(spacing: 3, lineSpacing: 7) {
                 ForEach(segs) { seg in segView(seg) }
             }
         } else {
-            VStack(alignment: .leading, spacing: 5) {
-                ForEach(segs) { seg in segView(seg) }
-            }
+            Text(attributed)
+                .lineSpacing(4)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -199,15 +226,9 @@ struct ParagraphView: View {
                     .padding(.vertical, 2)
                     .background(Color(.secondarySystemBackground))
                     .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 5, style: .continuous)
-                            .stroke(Color(.separator).opacity(0.25), lineWidth: 0.5)
-                    )
             } else {
                 Text(t)
-                    .font(.system(size: 16))
-                    .fontWeight(bold ? .semibold : .regular)
-                    .lineSpacing(4)
+                    .font(.system(size: 16, weight: bold ? .semibold : .regular))
             }
 
         case .math(let tex):

@@ -166,7 +166,11 @@ enum MarkdownParser {
                         i += 1
                     } else if l.isEmpty {
                         break
-                    } else if !acc.isEmpty && !l.hasPrefix("#") && !l.hasPrefix("```") {
+                    } else if !acc.isEmpty
+                                && !l.hasPrefix("- ") && !l.hasPrefix("* ")
+                                && !l.hasPrefix("+ ") && !l.hasPrefix(">")
+                                && !l.hasPrefix("#") && !l.hasPrefix("```")
+                                && l.range(of: #"^\d+\.\s"#, options: .regularExpression) == nil {
                         acc[acc.count - 1] += "\n" + l
                         i += 1
                     } else {
@@ -188,7 +192,10 @@ enum MarkdownParser {
                         i += 1
                     } else if l.isEmpty {
                         break
-                    } else if !acc.isEmpty {
+                    } else if !acc.isEmpty
+                                && !l.hasPrefix("- ") && !l.hasPrefix("* ")
+                                && !l.hasPrefix("+ ") && !l.hasPrefix(">")
+                                && !l.hasPrefix("#") && !l.hasPrefix("```") {
                         acc[acc.count - 1] += "\n" + l
                         i += 1
                     } else {

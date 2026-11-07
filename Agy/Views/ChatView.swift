@@ -24,7 +24,7 @@ struct ChatView: View {
                 messageList
                 composer
             }
-            .background(Color(.systemGroupedBackground).ignoresSafeArea())
+            .background(Color(.systemBackground).ignoresSafeArea())
 
             // 全屏任务列表：从左侧平滑滑入
             if showDrawer {
@@ -359,10 +359,10 @@ struct ChatView: View {
             HStack(alignment: .bottom, spacing: 8) {
                 Button { showAttach = true } label: {
                     Image(systemName: "plus")
-                        .font(.system(size: 17, weight: .medium))
-                        .frame(width: 32, height: 32)
-                        .background(Color(.secondarySystemBackground))
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .font(.system(size: 19, weight: .medium))
+                        .foregroundStyle(.primary)
+                        .frame(width: 30, height: 34)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
 
@@ -391,27 +391,28 @@ struct ChatView: View {
                     Image(systemName: state.isRunning ? "stop.fill" : "arrow.up")
                         .font(.system(size: 15, weight: .bold))
                         .foregroundStyle(.white)
-                        .frame(width: 32, height: 32)
+                        .frame(width: 34, height: 34)
                         .background(buttonColor)
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .clipShape(Circle())
                 }
                 .buttonStyle(.plain)
                 .disabled(!state.isRunning && state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && state.attachments.isEmpty)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(Color(.secondarySystemBackground))
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(inputFocused ? Color.accentColor : Color.clear, lineWidth: 1)
-            )
             .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color(.secondarySystemBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .stroke(inputFocused ? Color.accentColor.opacity(0.65) : Color.clear, lineWidth: 1.2)
+            )
+            .padding(.horizontal, 14)
+            .padding(.top, 4)
             .padding(.bottom, 8)
 
         }
         .background(Color(.systemBackground))
-        .overlay(alignment: .top) { Divider().opacity(0.4) }
+        .overlay(alignment: .top) { Divider().opacity(0.25) }
     }
 
     private var buttonColor: Color {
@@ -423,37 +424,57 @@ struct ChatView: View {
     // MARK: - 模型选择
 
     private var modelSheet: some View {
-        NavigationStack {
-            List {
-                ForEach(AppState.models, id: \.id) { m in
-                    Button {
-                        state.setModel(m.id)
-                        showModelPicker = false
-                    } label: {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(m.name).font(.system(size: 15))
-                                Text(m.id)
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .foregroundStyle(.secondary)
+        VStack(spacing: 0) {
+            HStack {
+                Text("选择运行模型")
+                    .font(.system(size: 16, weight: .semibold))
+                Spacer()
+                Button("完成") { showModelPicker = false }
+                    .font(.system(size: 15))
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 16)
+            .padding(.bottom, 10)
+
+            ScrollView {
+                VStack(spacing: 0) {
+                    ForEach(AppState.models, id: \.id) { m in
+                        Button {
+                            state.setModel(m.id)
+                            showModelPicker = false
+                        } label: {
+                            HStack(spacing: 10) {
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(m.name)
+                                        .font(.system(size: 15.5))
+                                        .foregroundStyle(.primary)
+                                    Text(m.id)
+                                        .font(.system(size: 11.5, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer(minLength: 4)
+                                if state.model == m.id {
+                                    Image(systemName: "checkmark")
+                                        .font(.system(size: 14, weight: .semibold))
+                                        .foregroundStyle(Color.accentColor)
+                                }
                             }
-                            Spacer()
-                            if state.model == m.id {
-                                Image(systemName: "checkmark").foregroundStyle(Color.accentColor)
-                            }
+                            .padding(.horizontal, 18)
+                            .frame(height: 54)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+
+                        if m.id != AppState.models.last?.id {
+                            Divider().opacity(0.35).padding(.leading, 18)
                         }
                     }
-                    .buttonStyle(.plain)
                 }
-            }
-            .navigationTitle("选择运行模型")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("完成") { showModelPicker = false }
-                }
+                .padding(.bottom, 12)
             }
         }
-        .presentationDetents([.medium])
+        .presentationDetents([.height(430)])
+        .presentationDragIndicator(.visible)
+    }
     }
 }
