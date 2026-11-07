@@ -1,13 +1,12 @@
 import SwiftUI
 
+/// Gemini 风格侧边栏：新建对话 + 搜索 + 按时间分组的会话列表
 struct DrawerView: View {
     @EnvironmentObject var state: AppState
     @Binding var isPresented: Bool
 
-    @State private var tab = 0
     @State private var query = ""
-    @State private var skills: [Skill] = []
-    @State private var loadingSkills = false
+    @State private var showSkills = false
 
     private var filtered: [Session] {
         let kw = query.trimmingCharacters(in: .whitespaces).lowercased()
@@ -15,182 +14,300 @@ struct DrawerView: View {
         return state.sessions.filter { $0.displayTitle.lowercased().contains(kw) }
     }
 
+    /// 今天 / 昨天 / 前 7 天 / 前 30 天 / 更早
+    private var grouped: [(String, [Session])] {
+        let cal = Calendar.current
+        var buckets: [(String, [Session])] = [
+            ("今天", []), ("昨天", []), ("前 7 天", []), ("前 30 天", []), ("更早", [])
+        ]
+        let now = Date()
+        for s in filtered {
+            let d = Date(timeIntervalSince1970: s.updated ?? s.started)
+            let days = cal.dateComponents([.day], from: cal.startOfDay(for: d),
+                                          to: cal.startOfDay(for: now)).day ?? 999
+            let idx: Int
+            if days <= 0 { idx = 0 }
+            else if days == 1 { idx = 1 }
+            else if days <= 7 { idx = 2 }
+            else if days <= 30 { idx = 3 }
+            else { idx = 4 }
+            buckets[idx].1.append(s)
+        }
+        return buckets.filter { !$0.1.isEmpty }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            // Tab
-            HStack(spacing: 8) {
-                tabButton("最近任务", index: 0)
-                tabButton("技能", index: 1)
-            }
-            .padding(.horizontal, 14)
-            .padding(.top, 14)
-            .padding(.bottom, 10)
-
-            if tab == 0 {
-                searchBar
-                sessionList
-            } else {
-                skillList
-            }
+            header
+            newChatButton
+            searchBar
+            content
+            footer
         }
         .frame(maxHeight: .infinity)
         .background(Color(.systemBackground))
         .overlay(alignment: .leading) {
-            Rectangle().fill(Color(.separator).opacity(0.4)).frame(width: 0.6)
+            Rectangle().fill(Color(.separator).opacity(0.35)).frame(width: 0.5)
         }
-        .task { await loadSkillsIfNeeded() }
-        .onChange(of: tab) { t in
-            if t == 1 { Task { await loadSkillsIfNeeded() } }
+        .sheet(isPresented: $showSkills) {
+            SkillsSheet()
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
         }
     }
 
-    private func tabButton(_ title: String, index: Int) -> some View {
+    // MARK: - 顶部
+
+    private var header: some View {
+        HStack(spacing: 9) {
+            Image("AppLogo")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 26, height: 26)
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            Text("Antigravity")
+                .font(.system(size: 20, weight: .medium))
+                .foregroundStyle(.primary)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 18)
+        .padding(.top, 14)
+        .padding(.bottom, 16)
+    }
+
+    private var newChatButton: some View {
         Button {
-            tab = index
+            state.newSession()
+            isPresented = false
         } label: {
-            Text(title)
-                .font(.system(size: 13, weight: .semibold))
-                .frame(maxWidth: .infinity)
-                .frame(height: 36)
-                .background(tab == index ? Color.accentColor : Color(.secondarySystemBackground))
-                .foregroundStyle(tab == index ? .white : .secondary)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            HStack(spacing: 9) {
+                Image(systemName: "square.and.pencil")
+                    .font(.system(size: 15, weight: .medium))
+                Text("新建对话")
+                    .font(.system(size: 15, weight: .medium))
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 15)
+            .frame(height: 44)
+            .frame(maxWidth: .infinity)
+            .background(Color(.secondarySystemBackground))
+            .clipShape(Capsule())
         }
         .buttonStyle(.plain)
+        .padding(.horizontal, 14)
     }
 
     private var searchBar: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 7) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 12))
+                .font(.system(size: 13))
                 .foregroundStyle(.secondary)
-            TextField("搜索会话…", text: $query)
-                .font(.system(size: 14))
+            TextField("搜索对话", text: $query)
+                .font(.system(size: 15))
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
-        }
-        .padding(.horizontal, 10)
-        .frame(height: 34)
-        .background(Color(.secondarySystemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .padding(.horizontal, 14)
-        .padding(.bottom, 8)
-    }
-
-    private var sessionList: some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                if filtered.isEmpty {
-                    Text(query.isEmpty ? "还没有任务" : "没有匹配的会话")
+            if !query.isEmpty {
+                Button {
+                    query = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 13))
                         .foregroundStyle(.tertiary)
-                        .padding(.top, 30)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 40)
+        .background(Color(.secondarySystemBackground))
+        .clipShape(Capsule())
+        .padding(.horizontal, 14)
+        .padding(.top, 10)
+        .padding(.bottom, 6)
+    }
+
+    // MARK: - 列表
+
+    private var content: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                if filtered.isEmpty {
+                    Text(query.isEmpty ? "还没有对话" : "没有匹配的对话")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.tertiary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 40)
                 }
 
-                ForEach(filtered) { s in
-                    Button {
-                        Task { await state.open(s) }
-                        isPresented = false
-                    } label: {
-                        VStack(spacing: 0) {
-                            HStack(spacing: 6) {
-                                Text(s.displayTitle)
-                                    .font(.system(size: 13.5, weight: .regular))
-                                    .foregroundStyle(.primary)
-                                    .lineLimit(1)
+                ForEach(grouped, id: \.0) { title, items in
+                    Text(title)
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 20)
+                        .padding(.top, 16)
+                        .padding(.bottom, 4)
 
-                                if let tc = s.turnCount, tc > 1 {
-                                    Text("\(tc) 轮")
-                                        .font(.system(size: 10, weight: .semibold))
-                                        .padding(.horizontal, 5)
-                                        .padding(.vertical, 1.5)
-                                        .background(Color.accentColor.opacity(0.14))
-                                        .foregroundStyle(Color.accentColor)
-                                        .clipShape(Capsule())
-                                }
-
-                                Spacer(minLength: 4)
-
-                                Text(s.displayDate)
-                                    .font(.system(size: 10.5, design: .monospaced))
-                                    .foregroundStyle(.tertiary)
-
-                                if !s.done {
-                                    Circle().fill(Color.orange).frame(width: 6, height: 6)
-                                }
-                            }
-                            .padding(.horizontal, 14)
-                            .frame(height: 42)
-
-                            Divider().opacity(0.35).padding(.leading, 14)
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .contextMenu {
-                        Button(role: .destructive) {
-                            Task { await state.deleteSession(s) }
-                        } label: { Label("删除会话", systemImage: "trash") }
+                    ForEach(items) { s in
+                        sessionRow(s)
                     }
                 }
             }
+            .padding(.bottom, 12)
+        }
+        .scrollDismissesKeyboard(.interactively)
+    }
+
+    private func sessionRow(_ s: Session) -> some View {
+        Button {
+            Task { await state.open(s) }
+            isPresented = false
+        } label: {
+            HStack(spacing: 8) {
+                Text(s.displayTitle)
+                    .font(.system(size: 15))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+
+                Spacer(minLength: 6)
+
+                if !s.done {
+                    Circle()
+                        .fill(Color.accentColor)
+                        .frame(width: 6, height: 6)
+                }
+
+                Button {
+                    // 单独的三点菜单占位，交给 contextMenu 处理
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .contextMenu {
+                    Button(role: .destructive) {
+                        Task { await state.deleteSession(s) }
+                    } label: { Label("删除对话", systemImage: "trash") }
+                }
+            }
+            .padding(.horizontal, 20)
+            .frame(height: 40)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button(role: .destructive) {
+                Task { await state.deleteSession(s) }
+            } label: { Label("删除对话", systemImage: "trash") }
         }
     }
 
-    private var skillList: some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                if loadingSkills {
-                    ProgressView().padding(.top, 30)
+    // MARK: - 底部
+
+    private var footer: some View {
+        VStack(spacing: 0) {
+            Divider().opacity(0.4)
+            HStack(spacing: 0) {
+                Button {
+                    showSkills = true
+                } label: {
+                    HStack(spacing: 7) {
+                        Image(systemName: "bolt.horizontal")
+                            .font(.system(size: 14))
+                        Text("技能")
+                            .font(.system(size: 14))
+                    }
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 46)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                Rectangle().fill(Color(.separator).opacity(0.35)).frame(width: 0.5, height: 22)
+
+                Button {
+                    state.logout()
+                    isPresented = false
+                } label: {
+                    HStack(spacing: 7) {
+                        Image(systemName: "rectangle.portrait.and.arrow.right")
+                            .font(.system(size: 14))
+                        Text("退出")
+                            .font(.system(size: 14))
+                    }
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 46)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+}
+
+// MARK: - 技能面板
+
+struct SkillsSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var skills: [Skill] = []
+    @State private var loading = true
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if loading {
+                    ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if skills.isEmpty {
                     Text("还没有安装技能")
-                        .font(.system(size: 13))
+                        .font(.system(size: 14))
                         .foregroundStyle(.tertiary)
-                        .padding(.top, 30)
-                }
-
-                ForEach(skills) { sk in
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(sk.name)
-                            .font(.system(size: 13.5, weight: .medium, design: .monospaced))
-                        if let d = sk.desc, !d.isEmpty {
-                            Text(d)
-                                .font(.system(size: 11.5))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(2)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    List {
+                        ForEach(skills) { sk in
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(sk.name)
+                                    .font(.system(size: 15, weight: .medium, design: .monospaced))
+                                if let d = sk.desc, !d.isEmpty {
+                                    Text(d)
+                                        .font(.system(size: 12.5))
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(2)
+                                }
+                            }
+                            .padding(.vertical, 3)
+                            .swipeActions {
+                                Button(role: .destructive) {
+                                    Task {
+                                        await APIClient.shared.deleteSkill(sk.name)
+                                        await load()
+                                    }
+                                } label: { Label("删除", systemImage: "trash") }
+                            }
                         }
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 9)
-                    .contextMenu {
-                        Button(role: .destructive) {
-                            Task {
-                                await APIClient.shared.deleteSkill(sk.name)
-                                await loadSkills(force: true)
-                            }
-                        } label: { Label("删除技能", systemImage: "trash") }
-                    }
-
-                    Divider().opacity(0.35).padding(.leading, 14)
+                    .listStyle(.plain)
                 }
             }
+            .navigationTitle("技能")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) { Button("完成") { dismiss() } }
+            }
+            .task { await load() }
         }
     }
 
-    private func loadSkillsIfNeeded() async {
-        if skills.isEmpty { await loadSkills(force: false) }
-    }
-
-    private func loadSkills(force: Bool) async {
-        if loadingSkills { return }
-        loadingSkills = true
-        defer { loadingSkills = false }
-        if let s = try? await APIClient.shared.skills() {
-            skills = s
-        } else if force {
-            state.showToast("技能列表加载失败")
-        }
+    private func load() async {
+        loading = true
+        skills = (try? await APIClient.shared.skills()) ?? []
+        loading = false
     }
 }
 
