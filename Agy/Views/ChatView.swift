@@ -178,7 +178,7 @@ struct ChatView: View {
             return
         }
         let raw: String
-        if case .user(let t, _) = item.kind { raw = item.rawText ?? t } else { raw = item.rawText ?? "" }
+        if case .user(let t, _, _) = item.kind { raw = item.rawText ?? t } else { raw = item.rawText ?? "" }
         state.draft = raw
         editingItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { inputFocused = true }
@@ -193,7 +193,7 @@ struct ChatView: View {
 
     private func editBannerText(_ item: ChatItem) -> String {
         let raw: String
-        if case .user(let t, _) = item.kind { raw = item.rawText ?? t } else { raw = item.rawText ?? "" }
+        if case .user(let t, _, _) = item.kind { raw = item.rawText ?? t } else { raw = item.rawText ?? "" }
         let one = raw.replacingOccurrences(of: "\n", with: " ")
         let short = one.count > 24 ? String(one.prefix(24)) + "…" : one
         return "编辑中：\(short)"

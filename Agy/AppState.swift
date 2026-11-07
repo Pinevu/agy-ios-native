@@ -337,7 +337,7 @@ final class AppState: ObservableObject {
         guard !isRunning else { showToast("请先等当前任务结束或停止"); return }
         guard let idx = items.firstIndex(where: { $0.id == itemId }) else { return }
         guard let turn = turnIndex(for: idx) else { return }
-        guard case .user(let text, let atts) = items[turn].kind else { return }
+        guard case .user(let text, let atts, _) = items[turn].kind else { return }
 
         let prompt = items[turn].rawText ?? text
         await truncateServer(from: turn)
