@@ -12,6 +12,13 @@ struct DrawerView: View {
     @State private var showQuota = false
     @State private var renaming: Session?
     @State private var showInstances = false
+    /// 配额弹层高度：标题 + 方案 + 各组（每组约 92pt）+ 底部统计
+    private var quotaSheetHeight: CGFloat {
+        let groups = CGFloat(quotaGroupCount)
+        return min(200 + groups * 96 + 60, 620)
+    }
+
+    @State private var quotaGroupCount = 2
     @State private var renameText = ""
 
     // MARK: - 数据
@@ -77,7 +84,7 @@ struct DrawerView: View {
             SkillsSheet().presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showQuota) {
-            QuotaSheet().presentationDetents([.large]).presentationDragIndicator(.visible)
+            QuotaSheet().presentationDetents([.height(quotaSheetHeight)]).presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showInstances) {
             InstancesSheet().presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
@@ -390,7 +397,7 @@ struct QuotaSheet: View {
                                     }
                                 }
 
-                                ForEach(g.windows) { w in
+                                ForEach(g.windows.filter { $0.remaining != nil || $0.resetAt != nil }) { w in
                                     VStack(alignment: .leading, spacing: 5) {
                                         HStack {
                                             Text(w.label).font(.system(size: 12.5))

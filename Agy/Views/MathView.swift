@@ -9,11 +9,28 @@ enum MathCapability {
     /// SwiftMath 能否解析；能就原生渲染（快、排版贴合），不能则回退 KaTeX
     static func canRenderNative(_ tex: String) -> Bool {
         let t = tex.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !t.isEmpty, t.count <= 240 else { return false }
+        guard !t.isEmpty, t.count <= 200 else { return false }
+
+        // 含中文 / 日文：字体缺字，布局阶段容易崩
         for sc in t.unicodeScalars {
             let v = sc.value
             if (0x4E00...0x9FFF).contains(v) || (0x3040...0x30FF).contains(v) { return false }
         }
+
+        // 这些环境 SwiftMath 1.7.x 支持不完整，交给 KaTeX
+        let risky = ["\\begin", "\\end", "\\over", "\\displaystyle",
+                     "\\text", "\\textbf", "\\mathrm", "\\mathbb",
+                     "\\tag", "\\hline", "\\substack", "\\\\"]
+        for r in risky where t.contains(r) { return false }
+
+        // 括号必须配对，否则解析器内部越界
+        if t.filter({ $0 == "{" }).count != t.filter({ $0 == "}" }).count { return false }
+        if t.filter({ $0 == "(" }).count != t.filter({ $0 == ")" }).count { return false }
+        if t.filter({ $0 == "[" }).count != t.filter({ $0 == "]" }).count { return false }
+
+        // 反斜杠命令必须合法结尾（\frac 后面紧跟 } 之类是坏的）
+        if t.hasSuffix("\\") { return false }
+
         return MTMathListBuilder.build(fromString: t) != nil
     }
 }
@@ -79,7 +96,12 @@ private struct SwiftMathLabel: UIViewRepresentable {
             return
         }
         // 直接塞 mathList，绕开会抛异常的 latex setter
-        v.font = MTFontManager().font(withName: "LatinModernMath", size: fontSize)
+        // 字体必须判空：赋 nil 会在布局阶段直接崩
+        if let f = MTFontManager().font(withName: "LatinModernMath", size: fontSize) {
+            v.font = f
+        } else if let f2 = MTFontManager().font(withName: "Asana-Math", size: fontSize) {
+            v.font = f2
+        }
         v.textColor = UIColor.label
         v.mathList = list
         v.labelMode = .display
@@ -88,10 +110,13 @@ private struct SwiftMathLabel: UIViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: MTMathUILabel, context: Context) -> CGSize? {
-        guard let w = proposal.width, w.isFinite, w > 0 else { return nil }
+        guard let w = proposal.width, w.isFinite, w > 1 else { return nil }
         let size = uiView.sizeThatFits(CGSize(width: w, height: .greatestFiniteMagnitude))
-        if size.height < 2 { return CGSize(width: w, height: fontSize * 1.4) }
-        return size
+        guard size.height.isFinite, size.height > 1 else {
+            return CGSize(width: w, height: fontSize * 1.5)
+        }
+        // 极端高宽比说明排版失败，限高避免撑爆列表
+        return CGSize(width: w, height: min(size.height, 320))
     }
 }
 

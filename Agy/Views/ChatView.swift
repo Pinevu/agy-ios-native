@@ -147,8 +147,8 @@ struct ChatView: View {
                 inputFocused = false
             }
 
-            headerButton(isDarkMode ? "moon.fill" : "sun.max.fill") {
-                toggleAppearance()
+            headerButton(state.isDarkEffective ? "moon.fill" : "sun.max.fill") {
+                state.toggleAppearance()
             }
 
             headerButton("line.3.horizontal") {
@@ -199,26 +199,6 @@ struct ChatView: View {
         let one = raw.replacingOccurrences(of: "\n", with: " ")
         let short = one.count > 24 ? String(one.prefix(24)) + "…" : one
         return "编辑中：\(short)"
-    }
-
-    /// 当前是否暗色（跟随系统时读 trait）
-    private var isDarkMode: Bool {
-        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-              let win = scene.windows.first else { return false }
-        switch win.overrideUserInterfaceStyle {
-        case .dark: return true
-        case .light: return false
-        default: return win.traitCollection.userInterfaceStyle == .dark
-        }
-    }
-
-    /// 亮 / 暗两态切换
-    private func toggleAppearance() {
-        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-              let win = scene.windows.first else { return }
-        withAnimation(.easeInOut(duration: 0.18)) {
-            win.overrideUserInterfaceStyle = isDarkMode ? .light : .dark
-        }
     }
 
     // MARK: - 消息列表
@@ -529,6 +509,12 @@ struct ChatView: View {
 
     // MARK: - 模型选择
 
+    /// 模型弹层高度：标题 56 + 每行 54 + 底部留白，最少 300
+    private var modelSheetHeight: CGFloat {
+        let rows = CGFloat(AppState.models.count)
+        return min(56 + rows * 54 + 24, 560)
+    }
+
     private var modelSheet: some View {
         VStack(spacing: 0) {
             HStack {
@@ -579,7 +565,7 @@ struct ChatView: View {
                 .padding(.bottom, 12)
             }
         }
-        .presentationDetents([.height(430)])
+        .presentationDetents([.height(modelSheetHeight)])
         .presentationDragIndicator(.visible)
     }
 }

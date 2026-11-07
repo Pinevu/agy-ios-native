@@ -1,3 +1,4 @@
+import UIKit
 import Foundation
 import SwiftUI
 import Combine
@@ -28,6 +29,30 @@ final class AppState: ObservableObject {
 
     // UI
     @Published var toast: String?
+
+    /// 外观：system / light / dark
+    @Published var appearanceMode: String =
+        UserDefaults.standard.string(forKey: "agy_appearance") ?? "system" {
+        didSet { UserDefaults.standard.set(appearanceMode, forKey: "agy_appearance") }
+    }
+
+    var colorScheme: ColorScheme? {
+        switch appearanceMode {
+        case "light": return .light
+        case "dark": return .dark
+        default: return nil
+        }
+    }
+
+    var isDarkEffective: Bool {
+        if let c = colorScheme { return c == .dark }
+        return UITraitCollection.current.userInterfaceStyle == .dark
+    }
+
+    /// 亮 / 暗两态切换（跟随系统时按当前系统状态取反）
+    func toggleAppearance() {
+        appearanceMode = isDarkEffective ? "light" : "dark"
+    }
 
     // 会话列表偏好（本地）：置顶 + 重命名
     @Published var pinnedIds: [String] = UserDefaults.standard.stringArray(forKey: "agy_pinned") ?? [] {

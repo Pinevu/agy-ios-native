@@ -309,8 +309,10 @@ struct CodeBlockView: View {
 
 struct AuthImage: View {
     let path: String
+    /// 最大展示宽度（默认铺满可用宽度）
     var maxWidth: CGFloat = .infinity
-    var corner: CGFloat = 10
+    var corner: CGFloat = 12
+
     @State private var image: UIImage?
     @State private var loading = true
     @State private var showFull = false
@@ -320,33 +322,43 @@ struct AuthImage: View {
             if let img = image {
                 Image(uiImage: img)
                     .resizable()
-                    .scaledToFit()
+                    .aspectRatio(contentMode: .fit)
                     .frame(maxWidth: maxWidth == .infinity ? nil : maxWidth)
                     .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: corner, style: .continuous)
+                            .stroke(Color.primary.opacity(0.06), lineWidth: 0.5)
+                    )
+                    .contentShape(Rectangle())
                     .onTapGesture { showFull = true }
             } else if loading {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                RoundedRectangle(cornerRadius: corner, style: .continuous)
                     .fill(Color(.secondarySystemBackground))
-                    .frame(height: 120)
-                    .overlay(ProgressView())
+                    .frame(height: 130)
+                    .overlay(ProgressView().scaleEffect(0.85))
             } else {
                 HStack(spacing: 6) {
                     Image(systemName: "photo")
                     Text((path as NSString).lastPathComponent)
                         .lineLimit(1)
+                        .truncationMode(.middle)
                 }
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
-                .padding(8)
+                .padding(.horizontal, 10)
+                .frame(height: 46)
                 .background(Color(.secondarySystemBackground))
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
             }
         }
         .task {
             guard image == nil else { return }
             loading = true
-            image = await APIClient.shared.loadImage(path: path)
-            loading = false
+            let img = await APIClient.shared.loadImage(path: path)
+            await MainActor.run {
+                image = img
+                loading = false
+            }
         }
         .fullScreenCover(isPresented: $showFull) {
             ZStack {
@@ -358,11 +370,14 @@ struct AuthImage: View {
                     HStack {
                         Spacer()
                         Button { showFull = false } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.system(size: 28))
-                                .foregroundStyle(.white.opacity(0.85))
+                            Image(systemName: "xmark")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 34, height: 34)
+                                .background(.ultraThinMaterial, in: Circle())
                         }
-                        .padding()
+                        .padding(.trailing, 16)
+                        .padding(.top, 10)
                     }
                     Spacer()
                 }

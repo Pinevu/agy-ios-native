@@ -8,7 +8,7 @@ struct AgyApp: App {
         WindowGroup {
             RootView()
                 .environmentObject(state)
-                .preferredColorScheme(nil)
+                .preferredColorScheme(state.colorScheme)
         }
     }
 }
