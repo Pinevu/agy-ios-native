@@ -154,7 +154,7 @@ final class AppState: ObservableObject {
             prompt = prompt.isEmpty ? attachText : prompt + "\n\n" + attachText
         }
 
-        let localAttachments = attachments.filter { $0.isImage }.map { $0.data }
+        let localAttachments: [Data] = attachments.filter { $0.isImage }.map { $0.data }
         draft = ""
         attachments = []
 

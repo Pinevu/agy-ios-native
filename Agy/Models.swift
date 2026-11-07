@@ -150,7 +150,7 @@ struct RunResponse: Decodable {
 // MARK: - 聊天气泡模型
 
 enum ChatItemKind {
-    case user(text: String, attachments: [String])
+    case user(text: String, attachments: [Data])
     case assistant(text: String)
     case thought(text: String)
     case tool(name: String, input: String, output: String?, seconds: Double?, running: Bool)

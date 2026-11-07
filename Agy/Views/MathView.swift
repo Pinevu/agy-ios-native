@@ -27,7 +27,7 @@ private struct MathLabel: UIViewRepresentable {
     }
 
     func updateUIView(_ v: MTMathUILabel, context: Context) {
-        v.font = MTFontManager().defaultFont(withSize: fontSize)
+        v.font = MTFontManager().font(withName: "LatinModernMath", size: fontSize)
         v.textColor = UIColor.label
         v.latex = latex.trimmingCharacters(in: .whitespacesAndNewlines)
         v.labelMode = .display
@@ -37,7 +37,6 @@ private struct MathLabel: UIViewRepresentable {
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: MTMathUILabel, context: Context) -> CGSize? {
         guard let w = proposal.width, w.isFinite, w > 0 else { return nil }
-        uiView.preferredMaxLayoutWidth = w
         let size = uiView.sizeThatFits(CGSize(width: w, height: .greatestFiniteMagnitude))
         // 渲染失败时高度接近 0，给个最小高度避免塌陷
         if size.height < 2 {
