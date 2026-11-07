@@ -18,7 +18,9 @@ enum APIError: LocalizedError {
 final class APIClient {
     static let shared = APIClient()
 
-    var baseURL = URL(string: "https://agy.nooh.cc")!
+    /// 当前实例地址，可切换
+    private(set) var baseURLString: String
+    var baseURL: URL { URL(string: baseURLString) ?? URL(string: "https://agy.nooh.cc")! }
     private(set) var token: String?
 
     private let session: URLSession
@@ -31,14 +33,32 @@ final class APIClient {
         cfg.waitsForConnectivity = true
         session = URLSession(configuration: cfg)
         decoder = JSONDecoder()
-        token = UserDefaults.standard.string(forKey: "agy_token")
+        baseURLString = UserDefaults.standard.string(forKey: "agy_base_url") ?? "https://agy.nooh.cc"
+        token = UserDefaults.standard.string(forKey: Self.tokenKey(for: baseURLString))
     }
+
+    static func tokenKey(for base: String) -> String { "agy_token::" + base }
 
     var isLoggedIn: Bool { (token?.isEmpty == false) }
 
+    /// 切到另一个实例：换地址 + 换该实例自己的令牌
+    func setBase(_ urlString: String) {
+        let clean = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "/+$", with: "", options: .regularExpression)
+        guard !clean.isEmpty else { return }
+        baseURLString = clean
+        UserDefaults.standard.set(clean, forKey: "agy_base_url")
+        token = UserDefaults.standard.string(forKey: Self.tokenKey(for: clean))
+    }
+
     func setToken(_ t: String?) {
         token = t
-        UserDefaults.standard.set(t, forKey: "agy_token")
+        let k = Self.tokenKey(for: baseURLString)
+        if let t, !t.isEmpty {
+            UserDefaults.standard.set(t, forKey: k)
+        } else {
+            UserDefaults.standard.removeObject(forKey: k)
+        }
     }
 
     // MARK: - 基础请求

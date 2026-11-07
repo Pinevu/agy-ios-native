@@ -26,6 +26,22 @@ enum MDBlock: Identifiable {
     }
 }
 
+/// 判断一段 $...$ 是否真的像公式，避免把价格、普通美元符号喂给渲染器（会崩）
+func looksLikeMath(_ tex: String) -> Bool {
+    let t = tex.trimmingCharacters(in: .whitespacesAndNewlines)
+    if t.isEmpty || t.count > 240 { return false }
+    // 中文/日文出现在公式里几乎都是误判
+    if t.range(of: "[\u4e00-\u9fff\u3040-\u30ff]", options: .regularExpression) != nil { return false }
+    // 括号必须配对，否则渲染器可能直接崩
+    if t.filter({ $0 == "{" }).count != t.filter({ $0 == "}" }).count { return false }
+    if t.contains("\\begin") && !t.contains("\\end") { return false }
+    if t.range(of: "\\[a-zA-Z]{2,}", options: .regularExpression) != nil { return true }
+    if t.range(of: "[\\^_=<>±×÷≤≥≠∞∑∫√]", options: .regularExpression) != nil { return true }
+    if t.range(of: "^[a-zA-Z]$", options: .regularExpression) != nil { return true }
+    if t.range(of: "^[0-9]{1,4}$", options: .regularExpression) != nil { return true }
+    return false
+}
+
 enum MarkdownParser {
     static func parse(_ src: String) -> [MDBlock] {
         var blocks: [MDBlock] = []
@@ -66,7 +82,12 @@ enum MarkdownParser {
                 flushParagraph(&para)
                 let body = String(line.dropFirst(2))
                 if body.hasSuffix("$$"), body.count >= 2 {
-                    blocks.append(.math(String(body.dropLast(2))))
+                    let tex = String(body.dropLast(2))
+                    if looksLikeMath(tex) {
+                        blocks.append(.math(tex))
+                    } else {
+                        blocks.append(.paragraph(tex))
+                    }
                     i += 1
                     continue
                 }
@@ -86,7 +107,12 @@ enum MarkdownParser {
                     i += 1
                 }
                 if closed {
-                    blocks.append(.math(acc.joined(separator: "\n")))
+                    let tex = acc.joined(separator: "\n")
+                    if looksLikeMath(tex) {
+                        blocks.append(.math(tex))
+                    } else {
+                        blocks.append(.paragraph(tex))
+                    }
                 }
                 continue
             }
@@ -234,7 +260,11 @@ enum InlineParser {
                     let tex = String(chars[(i + 1)..<end])
                     if !tex.contains("\n") {
                         flush()
-                        segs.append(.math(tex))
+                        if looksLikeMath(tex) {
+                            segs.append(.math(tex))
+                        } else {
+                            segs.append(.text("$" + tex + "$", bold: false, code: false))
+                        }
                         i = end + 1
                         continue
                     }

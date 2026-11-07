@@ -96,9 +96,24 @@ struct ChatView: View {
                         .stroke(Color(.separator).opacity(0.35), lineWidth: 0.6)
                 )
 
-            Text("Antigravity")
-                .font(.system(size: 17, weight: .bold))
-                .lineLimit(1)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Antigravity")
+                    .font(.system(size: 17, weight: .bold))
+                    .lineLimit(1)
+
+                Button { showModelPicker = true } label: {
+                    HStack(spacing: 3) {
+                        Text(state.currentModelName)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 7, weight: .semibold))
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                .buttonStyle(.plain)
+            }
 
             Spacer(minLength: 4)
 
@@ -128,7 +143,7 @@ struct ChatView: View {
                 inputFocused = false
             }
 
-            headerButton("circle.lefthalf.filled") {
+            headerButton(isDarkMode ? "moon.fill" : "sun.max.fill") {
                 toggleAppearance()
             }
 
@@ -180,13 +195,23 @@ struct ChatView: View {
         return "编辑中：\(short)"
     }
 
+    /// 当前是否暗色（跟随系统时读 trait）
+    private var isDarkMode: Bool {
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+              let win = scene.windows.first else { return false }
+        switch win.overrideUserInterfaceStyle {
+        case .dark: return true
+        case .light: return false
+        default: return win.traitCollection.userInterfaceStyle == .dark
+        }
+    }
+
+    /// 亮 / 暗两态切换
     private func toggleAppearance() {
         guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
               let win = scene.windows.first else { return }
-        switch win.overrideUserInterfaceStyle {
-        case .dark: win.overrideUserInterfaceStyle = .light
-        case .light: win.overrideUserInterfaceStyle = .unspecified
-        default: win.overrideUserInterfaceStyle = .dark
+        withAnimation(.easeInOut(duration: 0.18)) {
+            win.overrideUserInterfaceStyle = isDarkMode ? .light : .dark
         }
     }
 
@@ -330,44 +355,6 @@ struct ChatView: View {
                     .padding(.vertical, 8)
                 }
             }
-
-            // 工具条
-            HStack(spacing: 8) {
-                Button { showModelPicker = true } label: {
-                    HStack(spacing: 5) {
-                        Circle().fill(Color.accentColor).frame(width: 6, height: 6)
-                        Text(state.currentModelName)
-                            .font(.system(size: 12.5))
-                            .lineLimit(1)
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 8, weight: .semibold))
-                            .foregroundStyle(.tertiary)
-                    }
-                    .padding(.horizontal, 10)
-                    .frame(height: 30)
-                    .background(Color(.secondarySystemBackground))
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                }
-                .buttonStyle(.plain)
-
-                Button { showQuota = true } label: {
-                    HStack(spacing: 5) {
-                        Circle().fill(Color.green).frame(width: 6, height: 6)
-                        Text("配额")
-                            .font(.system(size: 12.5))
-                    }
-                    .padding(.horizontal, 10)
-                    .frame(height: 30)
-                    .background(Color(.secondarySystemBackground))
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                }
-                .buttonStyle(.plain)
-
-                Spacer()
-            }
-            .padding(.horizontal, 12)
-            .padding(.top, 8)
-            .padding(.bottom, 6)
 
             HStack(alignment: .bottom, spacing: 8) {
                 Button { showAttach = true } label: {

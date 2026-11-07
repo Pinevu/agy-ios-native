@@ -9,7 +9,7 @@ struct MarkdownView: View {
     private var blocks: [MDBlock] { MarkdownParser.parse(text) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 9) {
             ForEach(blocks) { block in
                 blockView(block)
             }
@@ -22,43 +22,56 @@ struct MarkdownView: View {
         switch block {
         case .heading(let level, let t):
             ParagraphView(text: t)
-                .font(.system(size: level <= 2 ? 19 : 16, weight: .semibold))
-                .padding(.top, 2)
+                .font(.system(size: headingSize(level), weight: level <= 2 ? .bold : .semibold))
+                .padding(.top, level <= 2 ? 8 : 4)
 
         case .paragraph(let t):
-            ParagraphView(text: t)
+            if let callout = Callout.parse(t) {
+                CalloutView(callout: callout)
+            } else {
+                ParagraphView(text: t)
+            }
 
         case .bullets(let arr):
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 7) {
                 ForEach(Array(arr.enumerated()), id: \.offset) { _, item in
-                    HStack(alignment: .top, spacing: 7) {
-                        Text("•").font(.system(size: 15, weight: .bold))
-                            .foregroundStyle(.secondary)
+                    HStack(alignment: .firstTextBaseline, spacing: 9) {
+                        Circle()
+                            .fill(Color.secondary.opacity(0.55))
+                            .frame(width: 5, height: 5)
+                            .offset(y: -3)
                         ParagraphView(text: item)
                     }
                 }
             }
 
         case .numbered(let arr):
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 7) {
                 ForEach(Array(arr.enumerated()), id: \.offset) { idx, item in
-                    HStack(alignment: .top, spacing: 7) {
-                        Text("\(idx + 1).").font(.system(size: 15, weight: .medium))
+                    HStack(alignment: .firstTextBaseline, spacing: 9) {
+                        Text("\(idx + 1).")
+                            .font(.system(size: 15, weight: .medium))
                             .foregroundStyle(.secondary)
+                            .frame(minWidth: 18, alignment: .leading)
                         ParagraphView(text: item)
                     }
                 }
             }
 
         case .quote(let t):
-            HStack(alignment: .top, spacing: 8) {
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(Color.accentColor.opacity(0.45))
-                    .frame(width: 3)
-                ParagraphView(text: t)
-                    .foregroundStyle(.secondary)
+            if let callout = Callout.parse(t) {
+                CalloutView(callout: callout)
+            } else {
+                HStack(alignment: .top, spacing: 10) {
+                    RoundedRectangle(cornerRadius: 1.5)
+                        .fill(Color.accentColor.opacity(0.55))
+                        .frame(width: 3)
+                    ParagraphView(text: t)
+                        .foregroundStyle(.secondary)
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.vertical, 2)
             }
-            .padding(.vertical, 2)
 
         case .code(let lang, let code):
             CodeBlockView(lang: lang, code: code)
@@ -69,8 +82,90 @@ struct MarkdownView: View {
                 .padding(.vertical, 2)
 
         case .rule:
-            Divider().padding(.vertical, 4)
+            Divider().opacity(0.4).padding(.vertical, 4)
         }
+    }
+
+    private func headingSize(_ level: Int) -> CGFloat {
+        switch level {
+        case 1: return 22
+        case 2: return 19
+        case 3: return 17
+        default: return 15.5
+        }
+    }
+}
+
+// MARK: - 提示块（[!TIP] / [!NOTE] / [!WARNING]）
+
+struct Callout {
+    let kind: String
+    let title: String?
+    let body: String
+    let color: Color
+    let icon: String
+
+    static func parse(_ raw: String) -> Callout? {
+        let lines = raw.components(separatedBy: "\n")
+        guard let first = lines.first?.trimmingCharacters(in: .whitespaces) else { return nil }
+        guard first.hasPrefix("[!") , first.hasSuffix("]") else { return nil }
+        let kind = String(first.dropFirst(2).dropLast()).uppercased()
+        guard ["TIP", "NOTE", "WARNING", "IMPORTANT", "CAUTION"].contains(kind) else { return nil }
+
+        var rest = lines.dropFirst().map { $0 }
+        var title: String? = nil
+        if let f = rest.first {
+            let ft = f.trimmingCharacters(in: .whitespaces)
+            if !ft.isEmpty, ft.hasSuffix("：") || ft.hasSuffix(":") {
+                title = String(ft.dropLast())
+                rest = rest.dropFirst()
+            }
+        }
+        let body = rest.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+
+        switch kind {
+        case "TIP":
+            return Callout(kind: kind, title: title, body: body, color: .accentColor, icon: "lightbulb")
+        case "WARNING", "CAUTION":
+            return Callout(kind: kind, title: title, body: body, color: .orange, icon: "exclamationmark.triangle")
+        case "IMPORTANT":
+            return Callout(kind: kind, title: title, body: body, color: .red, icon: "exclamationmark.circle")
+        default:
+            return Callout(kind: kind, title: title, body: body, color: .blue, icon: "info.circle")
+        }
+    }
+}
+
+struct CalloutView: View {
+    let callout: Callout
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            RoundedRectangle(cornerRadius: 1.5)
+                .fill(callout.color.opacity(0.75))
+                .frame(width: 3)
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 5) {
+                    Image(systemName: callout.icon)
+                        .font(.system(size: 11, weight: .semibold))
+                    Text(callout.title ?? callout.kind.capitalized)
+                        .font(.system(size: 12, weight: .semibold))
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(callout.color)
+
+                if !callout.body.isEmpty {
+                    ParagraphView(text: callout.body)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.vertical, 2)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemBackground).opacity(0.75))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }
 
@@ -83,15 +178,11 @@ struct ParagraphView: View {
     var body: some View {
         if segs.contains(where: { if case .math = $0 { return true }; return false }) {
             FlowLayout(spacing: 3, lineSpacing: 7) {
-                ForEach(segs) { seg in
-                    segView(seg)
-                }
+                ForEach(segs) { seg in segView(seg) }
             }
         } else {
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(segs) { seg in
-                    segView(seg)
-                }
+            VStack(alignment: .leading, spacing: 5) {
+                ForEach(segs) { seg in segView(seg) }
             }
         }
     }
@@ -103,12 +194,20 @@ struct ParagraphView: View {
             if code {
                 Text(t)
                     .font(.system(size: 13.5, design: .monospaced))
+                    .foregroundStyle(Color.accentColor)
                     .padding(.horizontal, 5)
-                    .padding(.vertical, 1.5)
+                    .padding(.vertical, 2)
                     .background(Color(.secondarySystemBackground))
                     .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .stroke(Color(.separator).opacity(0.25), lineWidth: 0.5)
+                    )
             } else {
-                Text(t).fontWeight(bold ? .semibold : .regular)
+                Text(t)
+                    .font(.system(size: 16))
+                    .fontWeight(bold ? .semibold : .regular)
+                    .lineSpacing(4)
             }
 
         case .math(let tex):
@@ -132,7 +231,7 @@ struct CodeBlockView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text(lang.isEmpty ? "code" : lang.uppercased())
+                Text(lang.isEmpty ? "CODE" : lang.uppercased())
                     .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -148,21 +247,26 @@ struct CodeBlockView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                 }
+                .buttonStyle(.plain)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 8)
 
-            Divider()
+            Divider().opacity(0.5)
 
             ScrollView(.horizontal, showsIndicators: false) {
                 Text(code)
                     .font(.system(size: 12.5, design: .monospaced))
                     .textSelection(.enabled)
-                    .padding(10)
+                    .padding(11)
             }
         }
         .background(Color(.secondarySystemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .stroke(Color(.separator).opacity(0.25), lineWidth: 0.5)
+        )
     }
 }
 

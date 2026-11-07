@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Gemini 风格侧边栏
 struct DrawerView: View {
@@ -10,6 +11,7 @@ struct DrawerView: View {
     @State private var showSkills = false
     @State private var showQuota = false
     @State private var renaming: Session?
+    @State private var showInstances = false
     @State private var renameText = ""
 
     // MARK: - 数据
@@ -42,10 +44,6 @@ struct DrawerView: View {
                     }
                     menuRow("技能", icon: "square.grid.2x2") { showSkills = true }
                     menuRow("配额", icon: "gauge.with.needle") { showQuota = true }
-                    menuRow("外观", icon: "circle.lefthalf.filled") {
-                        toggleAppearance()
-                        isPresented = false
-                    }
 
                     if !pinned.isEmpty {
                         sectionHeader("已置顶")
@@ -80,6 +78,9 @@ struct DrawerView: View {
         }
         .sheet(isPresented: $showQuota) {
             QuotaSheet().presentationDetents([.large]).presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showInstances) {
+            InstancesSheet().presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
         }
         .alert("重命名对话", isPresented: Binding(
             get: { renaming != nil },
@@ -259,19 +260,21 @@ struct DrawerView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("agy")
+                    Text(state.currentInstance.name)
                         .font(.system(size: 16, weight: .medium))
-                    Text("v2.4.0")
+                        .lineLimit(1)
+                    Text(state.currentInstance.url.replacingOccurrences(of: "https://", with: ""))
                         .font(.system(size: 12.5))
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
 
                 Spacer(minLength: 0)
 
                 Menu {
                     Button {
-                        toggleAppearance()
-                    } label: { Label("切换外观", systemImage: "circle.lefthalf.filled") }
+                        showInstances = true
+                    } label: { Label("切换实例", systemImage: "server.rack") }
                     Button {
                         Task { await state.refreshSessions() }
                     } label: { Label("刷新对话", systemImage: "arrow.clockwise") }
@@ -293,15 +296,6 @@ struct DrawerView: View {
         .background(Color(.systemBackground))
     }
 
-    private func toggleAppearance() {
-        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-              let win = scene.windows.first else { return }
-        switch win.overrideUserInterfaceStyle {
-        case .dark: win.overrideUserInterfaceStyle = .light
-        case .light: win.overrideUserInterfaceStyle = .unspecified
-        default: win.overrideUserInterfaceStyle = .dark
-        }
-    }
 }
 
 // MARK: - 技能面板

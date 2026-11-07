@@ -73,6 +73,95 @@ final class AppState: ObservableObject {
         let isImage: Bool
     }
 
+    struct Instance: Identifiable, Codable, Hashable {
+        var id: String
+        var name: String
+        var url: String
+    }
+
+    @Published var instances: [Instance] =
+        (UserDefaults.standard.data(forKey: "agy_instances_v1").flatMap {
+            try? JSONDecoder().decode([Instance].self, from: $0)
+        }) ?? [Instance(id: "default", name: "chuncheon", url: "https://agy.nooh.cc")] {
+        didSet {
+            if let d = try? JSONEncoder().encode(instances) {
+                UserDefaults.standard.set(d, forKey: "agy_instances_v1")
+            }
+        }
+    }
+
+    @Published var currentInstanceId: String =
+        UserDefaults.standard.string(forKey: "agy_instance_id") ?? "default" {
+        didSet { UserDefaults.standard.set(currentInstanceId, forKey: "agy_instance_id") }
+    }
+
+    var currentInstance: Instance {
+        instances.first { $0.id == currentInstanceId } ?? instances[0]
+    }
+
+    /// 切换实例：换地址、清空当前会话状态、重新鉴权
+    func switchInstance(_ inst: Instance) async {
+        guard !isRunning else { showToast("请先等当前任务结束或停止"); return }
+        currentInstanceId = inst.id
+        api.setBase(inst.url)
+        // 清空现场
+        sessions = []
+        currentSession = nil
+        conversationId = nil
+        items = []
+        assistantIndex = nil
+        isLoggedIn = false
+        let ok = await api.checkSession()
+        if ok {
+            isLoggedIn = true
+            await refreshSessions()
+            if let first = sessions.first { await open(first) }
+        } else {
+            api.setToken(nil)
+            isLoggedIn = false
+        }
+    }
+
+    func addInstance(name: String, url: String) async {
+        let clean = url.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "/+$", with: "", options: .regularExpression)
+        guard !clean.isEmpty, let u = URL(string: clean), u.host != nil else {
+            showToast("地址格式不对"); return
+        }
+        if instances.contains(where: { $0.url == clean }) {
+            showToast("这个实例已经加过了"); return
+        }
+        // 探活
+        var infoName = name
+        if let n = await Self.probe(clean), !n.isEmpty, name.isEmpty {
+            infoName = n
+        }
+        let inst = Instance(id: UUID().uuidString, name: infoName.isEmpty ? clean : infoName, url: clean)
+        instances.append(inst)
+        showToast("已添加 \(inst.name)")
+    }
+
+    func removeInstance(_ inst: Instance) {
+        guard instances.count > 1 else { showToast("至少保留一个实例"); return }
+        instances.removeAll { $0.id == inst.id }
+        if currentInstanceId == inst.id {
+            currentInstanceId = instances[0].id
+        }
+    }
+
+    /// 探测实例名（/api/info 免鉴权）
+    static func probe(_ base: String) async -> String? {
+        guard let url = URL(string: base + "/api/info") else { return nil }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 6
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              (resp as? HTTPURLResponse)?.statusCode == 200,
+              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return nil
+        }
+        return obj["name"] as? String
+    }
+
     struct ModelOption: Identifiable, Hashable {
         let id: String
         let name: String
