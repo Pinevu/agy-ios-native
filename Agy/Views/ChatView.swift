@@ -5,7 +5,7 @@ import PhotosUI
 struct ChatView: View {
     @EnvironmentObject var state: AppState
 
-    @State private var withAnimation(.easeIn(duration: 0.2)) { showDrawer = false }
+    @State private var showDrawer = false
     @State private var showModelPicker = false
     @State private var showQuota = false
     @State private var showAttach = false
