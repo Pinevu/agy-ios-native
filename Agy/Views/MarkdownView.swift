@@ -77,7 +77,7 @@ struct MarkdownView: View {
             CodeBlockView(lang: lang, code: code)
 
         case .math(let tex):
-            MathView(latex: tex, display: true, fontSize: 18)
+            RichParaView(segments: [.math(tex)], fontSize: 17, align: .center)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 2)
 
@@ -201,8 +201,15 @@ struct ParagraphView: View {
         return out
     }
 
+    private var hasMath: Bool {
+        segs.contains { if case .math = $0 { return true } else { return false } }
+    }
+
     var body: some View {
-        if needsFlow {
+        if hasMath {
+            // 含行内公式：整段交给 KaTeX（WebView），不会出现公式空白/断行
+            RichParaView(segments: segs, fontSize: 16)
+        } else if needsFlow {
             FlowLayout(spacing: 3, lineSpacing: 7) {
                 ForEach(segs) { seg in segView(seg) }
             }
@@ -295,6 +302,8 @@ struct CodeBlockView: View {
 
 struct AuthImage: View {
     let path: String
+    var maxWidth: CGFloat = .infinity
+    var corner: CGFloat = 10
     @State private var image: UIImage?
     @State private var loading = true
     @State private var showFull = false
@@ -305,6 +314,8 @@ struct AuthImage: View {
                 Image(uiImage: img)
                     .resizable()
                     .scaledToFit()
+                    .frame(maxWidth: maxWidth == .infinity ? nil : maxWidth)
+                    .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
                     .onTapGesture { showFull = true }
             } else if loading {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)

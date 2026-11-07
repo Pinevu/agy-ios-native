@@ -16,8 +16,8 @@ struct MessageRow: View {
 
     var body: some View {
         switch item.kind {
-        case .user(let text, let attachments):
-            userBubble(text: text, attachments: attachments)
+        case .user(let text, let attachments, let remotePaths):
+            userBubble(text: text, attachments: attachments, remotePaths: remotePaths)
 
         case .assistant(let text):
             MarkdownView(text: text)
@@ -87,7 +87,7 @@ struct MessageRow: View {
     // MARK: - 用户气泡
 
     @ViewBuilder
-    private func userBubble(text: String, attachments: [Data]) -> some View {
+    private func userBubble(text: String, attachments: [Data], remotePaths: [String] = []) -> some View {
         VStack(alignment: .trailing, spacing: 5) {
             if !attachments.isEmpty {
                 ForEach(Array(attachments.enumerated()), id: \.offset) { _, data in
@@ -98,6 +98,11 @@ struct MessageRow: View {
                             .frame(maxWidth: 190)
                             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     }
+                }
+            }
+            if !remotePaths.isEmpty {
+                ForEach(remotePaths, id: \.self) { p in
+                    AuthImage(path: p, maxWidth: 190, corner: 14)
                 }
             }
 

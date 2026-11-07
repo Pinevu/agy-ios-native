@@ -458,9 +458,22 @@ final class AppState: ObservableObject {
             switch ev.type {
             case "user_input":
                 let raw = ev.prompt ?? ""
-                items.append(ChatItem(kind: .user(text: raw, attachments: []),
+                var body: [String] = []
+                var paths: [String] = []
+                for line in raw.components(separatedBy: "\n") {
+                    let t = line.trimmingCharacters(in: .whitespaces)
+                    if t.hasPrefix("[附件]") {
+                        let p = t.replacingOccurrences(of: "[附件]", with: "")
+                            .trimmingCharacters(in: .whitespaces)
+                        if !p.isEmpty { paths.append(p) }
+                    } else if !t.isEmpty {
+                        body.append(line)
+                    }
+                }
+                let shown = body.isEmpty ? "已发送图片" : body.joined(separator: "\n")
+                items.append(ChatItem(kind: .user(text: shown, attachments: [], remotePaths: paths),
                                       taskId: ev.taskId,
-                                      rawText: raw))
+                                      rawText: shown))
                 assistantIndex = nil
             case "text":
                 guard let t = ev.text, !t.isEmpty else { continue }

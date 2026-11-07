@@ -457,11 +457,19 @@ struct ChatView: View {
                 }
                 .buttonStyle(.plain)
 
-                TextField("让它干点什么…", text: $state.draft, axis: .vertical)
-                    .font(.system(size: 16))
+                TextField("", text: $state.draft, axis: .vertical)
+                    .font(.system(size: 16.5))
                     .lineLimit(1...5)
                     .focused($inputFocused)
-                    .padding(.vertical, 7)
+                    .padding(.vertical, 9)
+                    .overlay(alignment: .leading) {
+                        if state.draft.isEmpty {
+                            Text("询问 Antigravity")
+                                .font(.system(size: 16.5))
+                                .foregroundStyle(Color(.placeholderText))
+                                .allowsHitTesting(false)
+                        }
+                    }
 
                 Button {
                     inputFocused = false
@@ -489,21 +497,24 @@ struct ChatView: View {
                 .buttonStyle(.plain)
                 .disabled(!state.isRunning && state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && state.attachments.isEmpty)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
             .background(Color(.secondarySystemBackground))
-            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .stroke(inputFocused ? Color.accentColor.opacity(0.65) : Color.clear, lineWidth: 1.2)
+                RoundedRectangle(cornerRadius: 26, style: .continuous)
+                    .stroke(inputFocused ? Color.accentColor.opacity(0.55)
+                                         : Color.primary.opacity(0.10),
+                            lineWidth: inputFocused ? 1.4 : 1)
             )
+            .shadow(color: .black.opacity(inputFocused ? 0.05 : 0.03), radius: 8, y: 2)
             .padding(.horizontal, 14)
-            .padding(.top, 4)
+            .padding(.top, 6)
             .padding(.bottom, 8)
 
         }
-        .background(Color(.secondarySystemBackground))
-        .overlay(alignment: .top) { Divider().opacity(0.25) }
+        .background(Color(.systemBackground))
+        .overlay(alignment: .top) { Divider().opacity(0.18) }
     }
 
     private var buttonColor: Color {
