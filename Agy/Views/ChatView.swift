@@ -476,5 +476,4 @@ struct ChatView: View {
         .presentationDetents([.height(430)])
         .presentationDragIndicator(.visible)
     }
-    }
 }
