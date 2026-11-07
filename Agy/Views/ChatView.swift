@@ -5,7 +5,7 @@ import PhotosUI
 struct ChatView: View {
     @EnvironmentObject var state: AppState
 
-    @State private var showDrawer = false
+    @State private var withAnimation(.easeIn(duration: 0.2)) { showDrawer = false }
     @State private var showModelPicker = false
     @State private var showQuota = false
     @State private var showAttach = false
@@ -17,7 +17,7 @@ struct ChatView: View {
     @State private var editingText = ""
 
     var body: some View {
-        ZStack(alignment: .trailing) {
+        ZStack(alignment: .leading) {
             VStack(spacing: 0) {
                 header
                 Divider().opacity(0.4)
@@ -26,16 +26,13 @@ struct ChatView: View {
             }
             .background(Color(.systemGroupedBackground).ignoresSafeArea())
 
+            // 全屏任务列表：从左侧平滑滑入
             if showDrawer {
-                Color.black.opacity(0.35)
-                    .ignoresSafeArea()
-                    .onTapGesture { withAnimation(.easeInOut(duration: 0.2)) { showDrawer = false } }
-                    .transition(.opacity)
-
                 DrawerView(isPresented: $showDrawer)
-                    .frame(width: 310)
-                    .transition(.move(edge: .trailing))
-                    .zIndex(2)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color(.systemBackground).ignoresSafeArea())
+                    .transition(.move(edge: .leading))
+                    .zIndex(3)
             }
 
             if let t = state.toast {
@@ -54,6 +51,7 @@ struct ChatView: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: state.toast)
+        .animation(.easeOut(duration: 0.24), value: showDrawer)
         .sheet(isPresented: $showModelPicker) { modelSheet }
         .sheet(isPresented: $showQuota) { QuotaSheet() }
         .confirmationDialog("添加附件", isPresented: $showAttach, titleVisibility: .visible) {
@@ -135,7 +133,7 @@ struct ChatView: View {
             }
 
             headerButton("line.3.horizontal") {
-                withAnimation(.easeInOut(duration: 0.2)) { showDrawer = true }
+                withAnimation(.easeOut(duration: 0.24)) { showDrawer = true }
             }
         }
         .padding(.horizontal, 14)

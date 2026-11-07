@@ -261,7 +261,7 @@ struct DrawerView: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text("agy")
                         .font(.system(size: 16, weight: .medium))
-                    Text("v2.3.0")
+                    Text("v2.4.0")
                         .font(.system(size: 12.5))
                         .foregroundStyle(.secondary)
                 }

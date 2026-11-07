@@ -136,20 +136,6 @@ struct MessageRow: View {
                             }
                         }
 
-                    if actions.edit != nil {
-                        Button {
-                            actions.edit?(item)
-                        } label: {
-                            Image(systemName: "pencil")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(.secondary)
-                                .frame(width: 26, height: 26)
-                                .background(Color(.secondarySystemBackground))
-                                .clipShape(Circle())
-                        }
-                        .buttonStyle(.plain)
-                        .padding(.bottom, 2)
-                    }
                 }
             }
         }
