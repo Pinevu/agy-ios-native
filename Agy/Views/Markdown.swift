@@ -38,7 +38,7 @@ func looksLikeMath(_ tex: String) -> Bool {
     // 括号必须配对，否则渲染器可能直接崩
     if t.filter({ $0 == "{" }).count != t.filter({ $0 == "}" }).count { return false }
     if t.contains("\\begin") && !t.contains("\\end") { return false }
-    if t.range(of: "\\[a-zA-Z]{2,}", options: .regularExpression) != nil { return true }
+    if t.range(of: "\\\\[a-zA-Z]{2,}", options: .regularExpression) != nil { return true }
     if t.range(of: "[\\^_=<>±×÷≤≥≠∞∑∫√]", options: .regularExpression) != nil { return true }
     if t.range(of: "^[a-zA-Z]$", options: .regularExpression) != nil { return true }
     if t.range(of: "^[0-9]{1,4}$", options: .regularExpression) != nil { return true }
@@ -260,6 +260,17 @@ enum InlineParser {
                     let path = String(chars[(close + 2)..<end])
                     segs.append(.image(path))
                     i = end + 1
+                    continue
+                }
+            }
+
+            // 块公式 $$...$$ 出现在行内时，作为整段公式
+            if c == "$" && i + 1 < chars.count && chars[i + 1] == "$" {
+                if let end = indexOfSeq("$$", in: chars, from: i + 2), end > i + 2 {
+                    let tex = String(chars[(i + 2)..<end])
+                    flush()
+                    segs.append(.math(tex))
+                    i = end + 2
                     continue
                 }
             }

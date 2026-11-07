@@ -16,6 +16,7 @@ struct ChatView: View {
     @State private var showFileImporter = false
     @FocusState private var inputFocused: Bool
     @State private var editingItem: ChatItem?
+    @State private var editingPaths: [String] = []
     @State private var editingText = ""
 
     var body: some View {
@@ -26,7 +27,7 @@ struct ChatView: View {
                 messageList
                 composer
             }
-            .background(Color(.white).ignoresSafeArea())
+            .background(Color(.systemBackground).ignoresSafeArea())
 
             // 全屏任务列表：从左侧平滑滑入
             if showDrawer {
@@ -179,6 +180,7 @@ struct ChatView: View {
         }
         let raw: String
         if case .user(let t, _, _) = item.kind { raw = item.rawText ?? t } else { raw = item.rawText ?? "" }
+        if case .user(_, _, let paths) = item.kind { editingPaths = paths } else { editingPaths = [] }
         state.draft = raw
         editingItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { inputFocused = true }
@@ -481,7 +483,9 @@ struct ChatView: View {
                             editingItem = nil
                             state.draft = ""
                             inputFocused = false
-                            await state.editAndResend(itemId: editing.id, newText: text)
+                            let keep = editingPaths
+                            editingPaths = []
+                            await state.editAndResend(itemId: editing.id, newText: text, keepPaths: keep)
                         } else {
                             await state.send()
                         }
@@ -503,9 +507,9 @@ struct ChatView: View {
             .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 26, style: .continuous)
-                    .stroke(inputFocused ? Color.accentColor.opacity(0.55)
-                                         : Color.primary.opacity(0.10),
-                            lineWidth: inputFocused ? 1.4 : 1)
+                    .stroke(inputFocused ? Color.accentColor.opacity(0.75)
+                                         : Color.primary.opacity(0.18),
+                            lineWidth: inputFocused ? 1.6 : 1.2)
             )
             .shadow(color: .black.opacity(inputFocused ? 0.05 : 0.03), radius: 8, y: 2)
             .padding(.horizontal, 14)

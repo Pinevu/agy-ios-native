@@ -318,7 +318,7 @@ final class AppState: ObservableObject {
     }
 
     /// 编辑用户消息并覆盖重发
-    func editAndResend(itemId: UUID, newText: String) async {
+    func editAndResend(itemId: UUID, newText: String, keepPaths: [String] = []) async {
         guard !isRunning else { showToast("请先等当前任务结束或停止"); return }
         guard let idx = items.firstIndex(where: { $0.id == itemId }) else { return }
         let trimmed = newText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -328,8 +328,16 @@ final class AppState: ObservableObject {
         await truncateServer(from: turn)
         items.removeSubrange(turn..<items.count)
         assistantIndex = nil
-        draft = trimmed
-        await send()
+
+        // 把原文里带的附件重新拼回去，避免图文消息编辑后丢图
+        if keepPaths.isEmpty {
+            draft = trimmed
+            await send()
+        } else {
+            let attach = keepPaths.map { "[附件] \($0)" }.joined(separator: "\n")
+            draft = trimmed + "\n\n" + attach
+            await send()
+        }
     }
 
     /// 重试：删掉这一轮及其之后的回复，用同样的提问重新生成

@@ -111,21 +111,6 @@ struct RichParaView: View {
     }
 }
 
-/// KaTeX 资源读取（bundle 内已被拍平）
-enum KaTeXAssets {
-    static let css: String = {
-        guard let u = Bundle.main.url(forResource: "katex.min", withExtension: "css"),
-              let s = try? String(contentsOf: u, encoding: .utf8) else { return "" }
-        return s.replacingOccurrences(of: "fonts/", with: "")
-    }()
-
-    static let js: String = {
-        guard let u = Bundle.main.url(forResource: "katex.min", withExtension: "js"),
-              let s = try? String(contentsOf: u, encoding: .utf8) else { return "" }
-        return s
-    }()
-}
-
 private struct ParaWebView: UIViewRepresentable {
     let html: String
     @Binding var measuredHeight: CGFloat

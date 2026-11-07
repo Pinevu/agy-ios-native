@@ -205,9 +205,16 @@ struct ParagraphView: View {
         segs.contains { if case .math = $0 { return true } else { return false } }
     }
 
+    private var allMathNative: Bool {
+        segs.allSatisfy { seg in
+            if case .math(let t) = seg { return MathCapability.canRenderNative(t) }
+            return true
+        }
+    }
+
     var body: some View {
-        if hasMath {
-            // 含行内公式：整段交给 KaTeX（WebView），不会出现公式空白/断行
+        if hasMath && !allMathNative {
+            // 有 SwiftMath 解析不了的公式：整段交给 KaTeX，保证排版完整
             RichParaView(segments: segs, fontSize: 16)
         } else if needsFlow {
             FlowLayout(spacing: 3, lineSpacing: 7) {

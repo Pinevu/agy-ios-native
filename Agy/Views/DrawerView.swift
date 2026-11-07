@@ -250,14 +250,12 @@ struct DrawerView: View {
         VStack(spacing: 0) {
             Divider().opacity(0.35)
             HStack(spacing: 12) {
-                ZStack {
-                    Circle()
-                        .fill(Color(.secondarySystemBackground))
-                        .frame(width: 38, height: 38)
-                    Text("A")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                }
+                Image("AppLogo")
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 38, height: 38)
+                    .clipShape(Circle())
+                    .overlay(Circle().stroke(Color.primary.opacity(0.08), lineWidth: 0.8))
 
                 VStack(alignment: .leading, spacing: 1) {
                     Text(state.currentInstance.name)
