@@ -1,0 +1,19 @@
+name: Swift Syntax Check
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'Agy/**'
+  workflow_dispatch:
+
+jobs:
+  parse:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: swiftc -parse
+        run: |
+          docker run --rm -v "$PWD":/src -w /src swift:5.9 \
+            bash -lc 'set -e; for f in $(find Agy -name "*.swift" | sort); do echo "== $f"; swiftc -parse "$f"; done; echo ALL_PARSED_OK'
