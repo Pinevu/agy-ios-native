@@ -112,7 +112,7 @@ struct MessageRow: View {
                         .padding(.vertical, 10)
                         .background(
                             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .fill(Color.accentColor.opacity(0.14))
+                                .fill(Color.accentColor.opacity(0.13))
                         )
                         .overlay(
                             RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -214,7 +214,7 @@ struct ToolCardView: View {
                 .padding(11)
             }
         }
-        .background(Color(.secondarySystemBackground))
+        .background(Color.primary.opacity(0.045))
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)

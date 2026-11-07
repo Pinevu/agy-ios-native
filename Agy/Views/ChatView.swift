@@ -6,6 +6,8 @@ struct ChatView: View {
     @EnvironmentObject var state: AppState
 
     @State private var showDrawer = false
+    @State private var showBackToBottom = false
+    @State private var turnCursor: Int = -1
     @State private var showModelPicker = false
     @State private var showQuota = false
     @State private var showAttach = false
@@ -24,7 +26,7 @@ struct ChatView: View {
                 messageList
                 composer
             }
-            .background(Color(.systemBackground).ignoresSafeArea())
+            .background(Color(.white).ignoresSafeArea())
 
             // 全屏任务列表：从左侧平滑滑入
             if showDrawer {
@@ -139,6 +141,7 @@ struct ChatView: View {
             .buttonStyle(.plain)
 
             headerButton("plus") {
+                dismissKeyboard()
                 state.newSession()
                 inputFocused = false
             }
@@ -148,6 +151,7 @@ struct ChatView: View {
             }
 
             headerButton("line.3.horizontal") {
+                dismissKeyboard()
                 withAnimation(.easeOut(duration: 0.24)) { showDrawer = true }
             }
         }
@@ -239,6 +243,11 @@ struct ChatView: View {
                         ))
                         .id(item.id)
                     }
+                    Color.clear
+                        .frame(height: 1)
+                        .id("bottom-sentinel")
+                        .onAppear { if showBackToBottom { withAnimation { showBackToBottom = false } } }
+                        .onDisappear { if !showBackToBottom { showBackToBottom = true } }
                     if state.isRunning {
                         HStack(spacing: 7) {
                             ProgressView().scaleEffect(0.7)
@@ -255,6 +264,11 @@ struct ChatView: View {
                 .padding(.bottom, 20)
             }
             .scrollDismissesKeyboard(.interactively)
+            .overlay(alignment: .bottomTrailing) {
+                floatingButtons(proxy)
+                    .padding(.trailing, 12)
+                    .padding(.bottom, 10)
+            }
             .onChange(of: state.items.count) { _ in
                 if let last = state.items.last {
                     withAnimation(.easeOut(duration: 0.15)) {
@@ -265,9 +279,86 @@ struct ChatView: View {
             .onChange(of: state.isRunning) { running in
                 if running {
                     withAnimation { proxy.scrollTo("running", anchor: .bottom) }
+                    turnCursor = -1
+                }
+            }
+            .onChange(of: state.currentSession?.id) { _ in
+                turnCursor = -1
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                    proxy.scrollTo("bottom-sentinel", anchor: .bottom)
+                }
+            }
+            .onChange(of: state.items.count) { _ in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    if !showBackToBottom {
+                        proxy.scrollTo("bottom-sentinel", anchor: .bottom)
+                    }
                 }
             }
         }
+    }
+
+
+    // MARK: - 悬浮滚动按钮
+
+    @ViewBuilder
+    private func floatingButtons(_ proxy: ScrollViewProxy) -> some View {
+        if showBackToBottom {
+            VStack(spacing: 8) {
+                if let prev = previousUserItem() {
+                    Button {
+                        turnCursor = prev.0
+                        withAnimation(.easeInOut(duration: 0.24)) {
+                            proxy.scrollTo(prev.1.id, anchor: .top)
+                        }
+                    } label: {
+                        fabIcon("chevron.up")
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("回上一轮")
+                }
+                Button {
+                    turnCursor = -1
+                    withAnimation(.easeOut(duration: 0.24)) {
+                        proxy.scrollTo("bottom-sentinel", anchor: .bottom)
+                    }
+                } label: {
+                    fabIcon("arrow.down")
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("回到底部")
+            }
+            .transition(.opacity.combined(with: .scale(scale: 0.9)))
+        }
+    }
+
+    private func fabIcon(_ name: String) -> some View {
+        Image(systemName: name)
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(.primary)
+            .frame(width: 36, height: 36)
+            .background(.regularMaterial, in: Circle())
+            .overlay(Circle().stroke(Color.primary.opacity(0.08), lineWidth: 0.8))
+            .shadow(color: .black.opacity(0.10), radius: 6, y: 2)
+    }
+
+    /// 返回（索引, 上一条用户消息），从当前游标往前找
+    private func previousUserItem() -> (Int, ChatItem)? {
+        let users = state.items.enumerated().filter {
+            if case .user = $0.element.kind { return true }
+            return false
+        }
+        guard !users.isEmpty else { return nil }
+        let start = turnCursor < 0 ? users.count - 1 : turnCursor - 1
+        guard start >= 0, start < users.count else { return nil }
+        let pair = users[start]
+        return (start, pair.element)
+    }
+
+    private func dismissKeyboard() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                        to: nil, from: nil, for: nil)
+        inputFocused = false
     }
 
     private var emptyState: some View {
@@ -411,7 +502,7 @@ struct ChatView: View {
             .padding(.bottom, 8)
 
         }
-        .background(Color(.systemBackground))
+        .background(Color(.secondarySystemBackground))
         .overlay(alignment: .top) { Divider().opacity(0.25) }
     }
 

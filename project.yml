@@ -6,20 +6,16 @@ options:
   createIntermediateGroups: true
   groupSortPosition: top
 
-packages:
-  SwiftMath:
-    url: https://github.com/mgriebling/SwiftMath
-    from: 1.7.3
-
 targets:
   Agy:
     type: application
     platform: iOS
     sources:
       - path: Agy
-    dependencies:
-      - package: SwiftMath
-        product: SwiftMath
+        excludes:
+          - "Resources"
+      - path: Agy/Resources
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: cc.nooh.agy.native
@@ -27,8 +23,8 @@ targets:
         INFOPLIST_FILE: Agy/Info.plist
         SWIFT_VERSION: "5.9"
         TARGETED_DEVICE_FAMILY: "1"
-        MARKETING_VERSION: "2.6.0"
-        CURRENT_PROJECT_VERSION: "7"
+        MARKETING_VERSION: "2.7.0"
+        CURRENT_PROJECT_VERSION: "8"
         CODE_SIGN_IDENTITY: ""
         CODE_SIGNING_REQUIRED: "NO"
         CODE_SIGNING_ALLOWED: "NO"
