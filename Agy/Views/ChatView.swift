@@ -56,24 +56,6 @@ struct ChatView: View {
         .animation(.easeInOut(duration: 0.2), value: state.toast)
         .sheet(isPresented: $showModelPicker) { modelSheet }
         .sheet(isPresented: $showQuota) { QuotaSheet() }
-        .sheet(item: $editingItem) { it in
-            EditMessageSheet(
-                original: it.rawText ?? {
-                    if case .user(let t, _) = it.kind { return t }
-                    return ""
-                }(),
-                onCancel: { editingItem = nil },
-                onSubmit: { newText in
-                    editingItem = nil
-                    Task {
-                        inputFocused = false
-                        await state.editAndResend(itemId: it.id, newText: newText)
-                    }
-                }
-            )
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
-        }
         .confirmationDialog("添加附件", isPresented: $showAttach, titleVisibility: .visible) {
             Button("照片图库") { showPhotoPicker = true }
             Button("文件") { showFileImporter = true }
@@ -178,8 +160,26 @@ struct ChatView: View {
             state.showToast("请先等当前任务结束或停止")
             return
         }
-        editingText = item.rawText ?? ""
+        let raw: String
+        if case .user(let t, _) = item.kind { raw = item.rawText ?? t } else { raw = item.rawText ?? "" }
+        state.draft = raw
         editingItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { inputFocused = true }
+    }
+
+    /// 退出编辑态（保留还是清空输入交给调用方）
+    private func cancelEditing(clearDraft: Bool = true) {
+        editingItem = nil
+        if clearDraft { state.draft = "" }
+        inputFocused = false
+    }
+
+    private func editBannerText(_ item: ChatItem) -> String {
+        let raw: String
+        if case .user(let t, _) = item.kind { raw = item.rawText ?? t } else { raw = item.rawText ?? "" }
+        let one = raw.replacingOccurrences(of: "\n", with: " ")
+        let short = one.count > 24 ? String(one.prefix(24)) + "…" : one
+        return "编辑中：\(short)"
     }
 
     private func toggleAppearance() {
@@ -270,6 +270,30 @@ struct ChatView: View {
 
     private var composer: some View {
         VStack(spacing: 0) {
+            // 编辑态提示条
+            if let editing = editingItem {
+                HStack(spacing: 8) {
+                    Image(systemName: "pencil")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text(editBannerText(editing))
+                        .font(.system(size: 12.5))
+                        .lineLimit(1)
+                    Spacer(minLength: 6)
+                    Button {
+                        cancelEditing()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 15))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .foregroundStyle(Color.accentColor)
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 2)
+            }
+
             // 附件预览
             if !state.attachments.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -366,8 +390,17 @@ struct ChatView: View {
                 Button {
                     inputFocused = false
                     Task {
-                        if state.isRunning { await state.stop() }
-                        else { await state.send() }
+                        if state.isRunning {
+                            await state.stop()
+                        } else if let editing = editingItem {
+                            let text = state.draft
+                            editingItem = nil
+                            state.draft = ""
+                            inputFocused = false
+                            await state.editAndResend(itemId: editing.id, newText: text)
+                        } else {
+                            await state.send()
+                        }
                     }
                 } label: {
                     Image(systemName: state.isRunning ? "stop.fill" : "arrow.up")

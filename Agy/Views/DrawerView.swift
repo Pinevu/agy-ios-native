@@ -1,118 +1,148 @@
 import SwiftUI
 
-/// Gemini 风格侧边栏：新建对话 + 搜索 + 按时间分组的会话列表
+/// Gemini 风格侧边栏
 struct DrawerView: View {
     @EnvironmentObject var state: AppState
     @Binding var isPresented: Bool
 
     @State private var query = ""
+    @State private var showSearch = false
     @State private var showSkills = false
+    @State private var showQuota = false
+    @State private var renaming: Session?
+    @State private var renameText = ""
 
-    private var filtered: [Session] {
+    // MARK: - 数据
+
+    private var sorted: [Session] {
         let kw = query.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !kw.isEmpty else { return state.sessions }
-        return state.sessions.filter { $0.displayTitle.lowercased().contains(kw) }
+        let all = kw.isEmpty
+            ? state.sessions
+            : state.sessions.filter { state.title(of: $0).lowercased().contains(kw) }
+        return all.sorted { a, b in
+            let pa = state.isPinned(a), pb = state.isPinned(b)
+            if pa != pb { return pa }
+            return (a.updated ?? a.started) > (b.updated ?? b.started)
+        }
     }
 
-    /// 今天 / 昨天 / 前 7 天 / 前 30 天 / 更早
-    private var grouped: [(String, [Session])] {
-        let cal = Calendar.current
-        var buckets: [(String, [Session])] = [
-            ("今天", []), ("昨天", []), ("前 7 天", []), ("前 30 天", []), ("更早", [])
-        ]
-        let now = Date()
-        for s in filtered {
-            let d = Date(timeIntervalSince1970: s.updated ?? s.started)
-            let days = cal.dateComponents([.day], from: cal.startOfDay(for: d),
-                                          to: cal.startOfDay(for: now)).day ?? 999
-            let idx: Int
-            if days <= 0 { idx = 0 }
-            else if days == 1 { idx = 1 }
-            else if days <= 7 { idx = 2 }
-            else if days <= 30 { idx = 3 }
-            else { idx = 4 }
-            buckets[idx].1.append(s)
-        }
-        return buckets.filter { !$0.1.isEmpty }
-    }
+    private var pinned: [Session] { sorted.filter { state.isPinned($0) } }
+    private var others: [Session] { sorted.filter { !state.isPinned($0) } }
 
     var body: some View {
         VStack(spacing: 0) {
             header
-            newChatButton
-            searchBar
-            content
+            if showSearch { searchBar }
+
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    menuRow("发起新对话", icon: "square.and.pencil") {
+                        state.newSession()
+                        isPresented = false
+                    }
+                    menuRow("技能", icon: "square.grid.2x2") { showSkills = true }
+                    menuRow("配额", icon: "gauge.with.needle") { showQuota = true }
+                    menuRow("外观", icon: "circle.lefthalf.filled") {
+                        toggleAppearance()
+                        isPresented = false
+                    }
+
+                    if !pinned.isEmpty {
+                        sectionHeader("已置顶")
+                        ForEach(pinned) { sessionRow($0) }
+                    }
+
+                    sectionHeader("全部", trailingFilter: true)
+                    if others.isEmpty {
+                        Text(query.isEmpty ? "还没有对话" : "没有匹配的对话")
+                            .font(.system(size: 15))
+                            .foregroundStyle(.tertiary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 22)
+                            .padding(.top, 14)
+                    } else {
+                        ForEach(others) { sessionRow($0) }
+                    }
+                }
+                .padding(.bottom, 20)
+            }
+            .scrollDismissesKeyboard(.interactively)
+
             footer
         }
         .frame(maxHeight: .infinity)
         .background(Color(.systemBackground))
         .overlay(alignment: .leading) {
-            Rectangle().fill(Color(.separator).opacity(0.35)).frame(width: 0.5)
+            Rectangle().fill(Color(.separator).opacity(0.3)).frame(width: 0.5)
         }
         .sheet(isPresented: $showSkills) {
-            SkillsSheet()
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
+            SkillsSheet().presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showQuota) {
+            QuotaSheet().presentationDetents([.large]).presentationDragIndicator(.visible)
+        }
+        .alert("重命名对话", isPresented: Binding(
+            get: { renaming != nil },
+            set: { if !$0 { renaming = nil } }
+        )) {
+            TextField("对话名称", text: $renameText)
+            Button("取消", role: .cancel) { renaming = nil }
+            Button("保存") {
+                if let s = renaming { state.rename(s, to: renameText) }
+                renaming = nil
+            }
         }
     }
 
     // MARK: - 顶部
 
     private var header: some View {
-        HStack(spacing: 9) {
-            Image("AppLogo")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 26, height: 26)
-                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        HStack(spacing: 18) {
             Text("Antigravity")
-                .font(.system(size: 20, weight: .medium))
+                .font(.system(size: 26, weight: .semibold))
                 .foregroundStyle(.primary)
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 18)
-        .padding(.top, 14)
-        .padding(.bottom, 16)
-    }
 
-    private var newChatButton: some View {
-        Button {
-            state.newSession()
-            isPresented = false
-        } label: {
-            HStack(spacing: 9) {
-                Image(systemName: "square.and.pencil")
-                    .font(.system(size: 15, weight: .medium))
-                Text("新建对话")
-                    .font(.system(size: 15, weight: .medium))
-                Spacer(minLength: 0)
+            Spacer(minLength: 0)
+
+            Button {
+                withAnimation(.easeInOut(duration: 0.18)) { showSearch.toggle() }
+                if !showSearch { query = "" }
+            } label: {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 19, weight: .regular))
+                    .foregroundStyle(.primary)
+                    .frame(width: 30, height: 30)
             }
-            .foregroundStyle(.primary)
-            .padding(.horizontal, 15)
-            .frame(height: 44)
-            .frame(maxWidth: .infinity)
-            .background(Color(.secondarySystemBackground))
-            .clipShape(Capsule())
+            .buttonStyle(.plain)
+
+            Button {
+                isPresented = false
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 19, weight: .regular))
+                    .foregroundStyle(.primary)
+                    .frame(width: 30, height: 30)
+            }
+            .buttonStyle(.plain)
         }
-        .buttonStyle(.plain)
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 20)
+        .padding(.top, 14)
+        .padding(.bottom, 12)
     }
 
     private var searchBar: some View {
         HStack(spacing: 7) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 13))
+                .font(.system(size: 14))
                 .foregroundStyle(.secondary)
             TextField("搜索对话", text: $query)
-                .font(.system(size: 15))
+                .font(.system(size: 16))
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
             if !query.isEmpty {
-                Button {
-                    query = ""
-                } label: {
+                Button { query = "" } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 13))
+                        .font(.system(size: 14))
                         .foregroundStyle(.tertiary)
                 }
                 .buttonStyle(.plain)
@@ -121,41 +151,46 @@ struct DrawerView: View {
         .padding(.horizontal, 14)
         .frame(height: 40)
         .background(Color(.secondarySystemBackground))
-        .clipShape(Capsule())
-        .padding(.horizontal, 14)
-        .padding(.top, 10)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(.horizontal, 16)
         .padding(.bottom, 6)
     }
 
-    // MARK: - 列表
+    // MARK: - 行
 
-    private var content: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                if filtered.isEmpty {
-                    Text(query.isEmpty ? "还没有对话" : "没有匹配的对话")
-                        .font(.system(size: 14))
-                        .foregroundStyle(.tertiary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 40)
-                }
-
-                ForEach(grouped, id: \.0) { title, items in
-                    Text(title)
-                        .font(.system(size: 12.5, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 20)
-                        .padding(.top, 16)
-                        .padding(.bottom, 4)
-
-                    ForEach(items) { s in
-                        sessionRow(s)
-                    }
-                }
+    private func menuRow(_ title: String, icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 16) {
+                Image(systemName: icon)
+                    .font(.system(size: 19, weight: .regular))
+                    .frame(width: 24)
+                Text(title)
+                    .font(.system(size: 17))
+                Spacer(minLength: 0)
             }
-            .padding(.bottom, 12)
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 22)
+            .frame(height: 52)
+            .contentShape(Rectangle())
         }
-        .scrollDismissesKeyboard(.interactively)
+        .buttonStyle(.plain)
+    }
+
+    private func sectionHeader(_ title: String, trailingFilter: Bool = false) -> some View {
+        HStack(spacing: 0) {
+            Text(title)
+                .font(.system(size: 15))
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+            if trailingFilter {
+                Image(systemName: "line.3.horizontal.decrease")
+                    .font(.system(size: 16))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 22)
+        .padding(.top, 22)
+        .padding(.bottom, 6)
     }
 
     private func sessionRow(_ s: Session) -> some View {
@@ -164,45 +199,47 @@ struct DrawerView: View {
             isPresented = false
         } label: {
             HStack(spacing: 8) {
-                Text(s.displayTitle)
-                    .font(.system(size: 15))
+                Text(state.title(of: s))
+                    .font(.system(size: 16.5))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
 
                 Spacer(minLength: 6)
 
                 if !s.done {
-                    Circle()
-                        .fill(Color.accentColor)
-                        .frame(width: 6, height: 6)
+                    Circle().fill(Color.accentColor).frame(width: 7, height: 7)
                 }
-
-                Button {
-                    // 单独的三点菜单占位，交给 contextMenu 处理
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 13, weight: .semibold))
+                if state.isPinned(s) {
+                    Image(systemName: "pin.fill")
+                        .font(.system(size: 11))
                         .foregroundStyle(.tertiary)
-                        .frame(width: 24, height: 24)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .contextMenu {
-                    Button(role: .destructive) {
-                        Task { await state.deleteSession(s) }
-                    } label: { Label("删除对话", systemImage: "trash") }
                 }
             }
-            .padding(.horizontal, 20)
-            .frame(height: 40)
+            .padding(.horizontal, 22)
+            .frame(height: 52)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .contextMenu {
+            Button {
+                state.togglePin(s)
+            } label: {
+                Label(state.isPinned(s) ? "取消置顶" : "置顶",
+                      systemImage: state.isPinned(s) ? "pin.slash" : "pin")
+            }
+            Button {
+                renameText = state.title(of: s)
+                renaming = s
+            } label: {
+                Label("重命名", systemImage: "pencil")
+            }
+            Divider()
             Button(role: .destructive) {
                 Task { await state.deleteSession(s) }
-            } label: { Label("删除对话", systemImage: "trash") }
+            } label: {
+                Label("删除", systemImage: "trash")
+            }
         }
     }
 
@@ -210,43 +247,59 @@ struct DrawerView: View {
 
     private var footer: some View {
         VStack(spacing: 0) {
-            Divider().opacity(0.4)
-            HStack(spacing: 0) {
-                Button {
-                    showSkills = true
-                } label: {
-                    HStack(spacing: 7) {
-                        Image(systemName: "bolt.horizontal")
-                            .font(.system(size: 14))
-                        Text("技能")
-                            .font(.system(size: 14))
-                    }
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 46)
-                    .contentShape(Rectangle())
+            Divider().opacity(0.35)
+            HStack(spacing: 12) {
+                ZStack {
+                    Circle()
+                        .fill(Color(.secondarySystemBackground))
+                        .frame(width: 38, height: 38)
+                    Text("A")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.secondary)
                 }
-                .buttonStyle(.plain)
 
-                Rectangle().fill(Color(.separator).opacity(0.35)).frame(width: 0.5, height: 22)
-
-                Button {
-                    state.logout()
-                    isPresented = false
-                } label: {
-                    HStack(spacing: 7) {
-                        Image(systemName: "rectangle.portrait.and.arrow.right")
-                            .font(.system(size: 14))
-                        Text("退出")
-                            .font(.system(size: 14))
-                    }
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 46)
-                    .contentShape(Rectangle())
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("agy")
+                        .font(.system(size: 16, weight: .medium))
+                    Text("v2.3.0")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(.secondary)
                 }
-                .buttonStyle(.plain)
+
+                Spacer(minLength: 0)
+
+                Menu {
+                    Button {
+                        toggleAppearance()
+                    } label: { Label("切换外观", systemImage: "circle.lefthalf.filled") }
+                    Button {
+                        Task { await state.refreshSessions() }
+                    } label: { Label("刷新对话", systemImage: "arrow.clockwise") }
+                    Divider()
+                    Button(role: .destructive) {
+                        state.logout()
+                        isPresented = false
+                    } label: { Label("退出登录", systemImage: "rectangle.portrait.and.arrow.right") }
+                } label: {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 20))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 34, height: 34)
+                }
             }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 10)
+        }
+        .background(Color(.systemBackground))
+    }
+
+    private func toggleAppearance() {
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+              let win = scene.windows.first else { return }
+        switch win.overrideUserInterfaceStyle {
+        case .dark: win.overrideUserInterfaceStyle = .light
+        case .light: win.overrideUserInterfaceStyle = .unspecified
+        default: win.overrideUserInterfaceStyle = .dark
         }
     }
 }

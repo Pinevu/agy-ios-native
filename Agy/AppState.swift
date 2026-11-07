@@ -29,6 +29,38 @@ final class AppState: ObservableObject {
     // UI
     @Published var toast: String?
 
+    // 会话列表偏好（本地）：置顶 + 重命名
+    @Published var pinnedIds: [String] = UserDefaults.standard.stringArray(forKey: "agy_pinned") ?? [] {
+        didSet { UserDefaults.standard.set(pinnedIds, forKey: "agy_pinned") }
+    }
+    @Published var customTitles: [String: String] =
+        (UserDefaults.standard.dictionary(forKey: "agy_titles") as? [String: String]) ?? [:] {
+        didSet { UserDefaults.standard.set(customTitles, forKey: "agy_titles") }
+    }
+
+    func togglePin(_ s: Session) {
+        if let i = pinnedIds.firstIndex(of: s.id) {
+            pinnedIds.remove(at: i)
+            showToast("已取消置顶")
+        } else {
+            pinnedIds.insert(s.id, at: 0)
+            showToast("已置顶")
+        }
+    }
+
+    func isPinned(_ s: Session) -> Bool { pinnedIds.contains(s.id) }
+
+    func rename(_ s: Session, to title: String) {
+        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+        customTitles[s.id] = t
+        showToast("已重命名")
+    }
+
+    func title(of s: Session) -> String {
+        customTitles[s.id] ?? s.displayTitle
+    }
+
     private var streamTask: Task<Void, Never>?
     private var assistantIndex: Int?
 
