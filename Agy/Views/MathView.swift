@@ -14,7 +14,7 @@ enum MathCapability {
             let v = sc.value
             if (0x4E00...0x9FFF).contains(v) || (0x3040...0x30FF).contains(v) { return false }
         }
-        return MTMathListBuilder.build(from: t) != nil
+        return MTMathListBuilder.build(fromString: t) != nil
     }
 }
 
@@ -74,7 +74,7 @@ private struct SwiftMathLabel: UIViewRepresentable {
 
     func updateUIView(_ v: MTMathUILabel, context: Context) {
         let t = latex.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let list = MTMathListBuilder.build(from: t) else {
+        guard let list = MTMathListBuilder.build(fromString: t) else {
             DispatchQueue.main.async { onFail() }
             return
         }
