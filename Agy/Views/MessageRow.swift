@@ -1,10 +1,18 @@
 import SwiftUI
 import UIKit
 
+/// 一条消息能做的操作，对齐 Minis 的会话机制
+struct MessageActions {
+    var edit: ((ChatItem) -> Void)?
+    var retry: ((ChatItem) -> Void)?
+    var deleteFrom: ((ChatItem) -> Void)?
+
+    static let none = MessageActions()
+}
+
 struct MessageRow: View {
     let item: ChatItem
-    /// 点击铅笔/长按「编辑后重发」
-    var onEdit: ((ChatItem) -> Void)? = nil
+    var actions: MessageActions = .none
 
     var body: some View {
         switch item.kind {
@@ -14,6 +22,21 @@ struct MessageRow: View {
         case .assistant(let text):
             MarkdownView(text: text)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+                .contextMenu {
+                    Button {
+                        UIPasteboard.general.string = text
+                    } label: { Label("复制", systemImage: "doc.on.doc") }
+
+                    if let r = actions.retry {
+                        Button { r(item) } label: { Label("重试", systemImage: "arrow.clockwise") }
+                    }
+                    if let d = actions.deleteFrom {
+                        Button(role: .destructive) { d(item) } label: {
+                            Label("从此处删除", systemImage: "trash")
+                        }
+                    }
+                }
 
         case .thought(let text):
             HStack(alignment: .top, spacing: 6) {
@@ -95,10 +118,27 @@ struct MessageRow: View {
                             RoundedRectangle(cornerRadius: 18, style: .continuous)
                                 .stroke(Color.accentColor.opacity(0.18), lineWidth: 0.7)
                         )
+                        .contextMenu {
+                            Button {
+                                UIPasteboard.general.string = text
+                            } label: { Label("复制", systemImage: "doc.on.doc") }
 
-                    if onEdit != nil {
+                            if let e = actions.edit {
+                                Button { e(item) } label: { Label("编辑", systemImage: "square.and.pencil") }
+                            }
+                            if let r = actions.retry {
+                                Button { r(item) } label: { Label("重试", systemImage: "arrow.clockwise") }
+                            }
+                            if let d = actions.deleteFrom {
+                                Button(role: .destructive) { d(item) } label: {
+                                    Label("从此处删除", systemImage: "trash")
+                                }
+                            }
+                        }
+
+                    if actions.edit != nil {
                         Button {
-                            onEdit?(item)
+                            actions.edit?(item)
                         } label: {
                             Image(systemName: "pencil")
                                 .font(.system(size: 11, weight: .semibold))
@@ -109,20 +149,6 @@ struct MessageRow: View {
                         }
                         .buttonStyle(.plain)
                         .padding(.bottom, 2)
-                    }
-                }
-                .contextMenu {
-                    Button {
-                        UIPasteboard.general.string = text
-                    } label: {
-                        Label("复制", systemImage: "doc.on.doc")
-                    }
-                    if onEdit != nil {
-                        Button {
-                            onEdit?(item)
-                        } label: {
-                            Label("编辑后重发", systemImage: "pencil")
-                        }
                     }
                 }
             }

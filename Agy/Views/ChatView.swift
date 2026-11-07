@@ -202,9 +202,18 @@ struct ChatView: View {
                         emptyState
                     }
                     ForEach(state.items) { item in
-                        MessageRow(item: item) { it in
-                            openEditor(for: it)
-                        }
+                        MessageRow(item: item, actions: MessageActions(
+                            edit: { openEditor(for: $0) },
+                            retry: { it in
+                                Task {
+                                    inputFocused = false
+                                    await state.retry(itemId: it.id)
+                                }
+                            },
+                            deleteFrom: { it in
+                                Task { await state.deleteFrom(itemId: it.id) }
+                            }
+                        ))
                         .id(item.id)
                     }
                     if state.isRunning {

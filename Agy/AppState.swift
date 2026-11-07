@@ -183,31 +183,70 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// 编辑某条用户消息并覆盖重发：物理删除服务端对应轮次 → 本地截掉后半段 → 重新发送
+    // MARK: - 编辑 / 重试 / 删除（对齐 Minis 的会话操作）
+
+    /// 找到某条消息所属的「用户轮次」下标（从它往前找最近的用户消息）
+    private func turnIndex(for idx: Int) -> Int? {
+        guard idx >= 0, idx < items.count else { return nil }
+        var i = idx
+        while i >= 0 {
+            if case .user = items[i].kind { return i }
+            i -= 1
+        }
+        return nil
+    }
+
+    /// 编辑用户消息并覆盖重发
     func editAndResend(itemId: UUID, newText: String) async {
         guard !isRunning else { showToast("请先等当前任务结束或停止"); return }
         guard let idx = items.firstIndex(where: { $0.id == itemId }) else { return }
-        let target = items[idx]
         let trimmed = newText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
-        // 1) 服务端真删（含 agy 会话 SQLite 对应轮次）
-        if let tid = target.taskId {
-            let dropped = await api.truncateFrom(tid)
-            if dropped {
-                // 首轮被编辑 → 整个 agy 会话已销毁，断开续接
-                conversationId = nil
-                currentSession = nil
-            }
-        }
-
-        // 2) 本地砍掉这条及其之后的所有内容
-        items.removeSubrange(idx..<items.count)
+        let turn = turnIndex(for: idx) ?? idx
+        await truncateServer(from: turn)
+        items.removeSubrange(turn..<items.count)
         assistantIndex = nil
-
-        // 3) 用新文本重新发送
-        draft = newText
+        draft = trimmed
         await send()
+    }
+
+    /// 重试：删掉这一轮及其之后的回复，用同样的提问重新生成
+    func retry(itemId: UUID) async {
+        guard !isRunning else { showToast("请先等当前任务结束或停止"); return }
+        guard let idx = items.firstIndex(where: { $0.id == itemId }) else { return }
+        guard let turn = turnIndex(for: idx) else { return }
+        guard case .user(let text, let atts) = items[turn].kind else { return }
+
+        let prompt = items[turn].rawText ?? text
+        await truncateServer(from: turn)
+        items.removeSubrange(turn..<items.count)
+        assistantIndex = nil
+        _ = atts
+        draft = prompt
+        await send()
+    }
+
+    /// 从此处删除：服务端截断 + 本地移除该轮及其之后
+    func deleteFrom(itemId: UUID) async {
+        guard !isRunning else { showToast("请先等当前任务结束或停止"); return }
+        guard let idx = items.firstIndex(where: { $0.id == itemId }) else { return }
+        let turn = turnIndex(for: idx) ?? idx
+        await truncateServer(from: turn)
+        items.removeSubrange(turn..<items.count)
+        assistantIndex = nil
+        showToast("已删除")
+    }
+
+    /// 调服务端截断；首轮被删时整段 conversation 会被销毁，这里同步断开续接
+    private func truncateServer(from turn: Int) async {
+        guard turn >= 0, turn < items.count else { return }
+        guard let tid = items[turn].taskId else { return }
+        let dropped = await api.truncateFrom(tid)
+        if dropped {
+            conversationId = nil
+            currentSession = nil
+        }
     }
 
     func stop() async {
