@@ -149,6 +149,11 @@ final class APIClient {
 
     // MARK: - 配额 / 技能
 
+    /// 服务端正在跑的任务（用于校正本地状态）
+    func runningTasks() async throws -> [ServerRunning] {
+        try await send("api/running", as: [ServerRunning].self)
+    }
+
     func quota() async throws -> QuotaResponse {
         try await send("api/quota", as: QuotaResponse.self)
     }

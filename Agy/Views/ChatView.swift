@@ -559,12 +559,12 @@ struct ChatView: View {
     private var runningSheet: some View {
         NavigationStack {
             Group {
-                if state.runningList.isEmpty {
+                if state.mergedRunning.isEmpty {
                     runningEmpty
                 } else {
                     ScrollView {
                         VStack(spacing: 0) {
-                            ForEach(state.runningList, id: \.taskId) { rt in
+                            ForEach(state.mergedRunning, id: \.taskId) { rt in
                                 runningRow(rt)
                             }
                         }
@@ -630,7 +630,7 @@ struct ChatView: View {
         .contentShape(Rectangle())
         .onTapGesture { jumpToRunning(rt) }
         .overlay(alignment: .bottom) {
-            if rt.taskId != state.runningList.last?.taskId {
+            if rt.taskId != state.mergedRunning.last?.taskId {
                 Divider().opacity(0.35).padding(.leading, 47)
             }
         }

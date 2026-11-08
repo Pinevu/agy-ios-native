@@ -82,6 +82,23 @@ struct ChatEvent: Decodable {
     }
 }
 
+// MARK: - 服务端运行中任务
+
+struct ServerRunning: Decodable {
+    let taskId: String
+    let sessionId: String?
+    let conversationId: String?
+    let title: String?
+    let elapsed: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case title, elapsed
+        case taskId = "task_id"
+        case sessionId = "session_id"
+        case conversationId = "conversation_id"
+    }
+}
+
 // MARK: - 配额
 
 struct QuotaResponse: Decodable {

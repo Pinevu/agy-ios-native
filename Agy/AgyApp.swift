@@ -29,6 +29,7 @@ struct RootView: View {
             guard !loaded else { return }
             loaded = true
             await state.bootstrap()
+            state.startRunningPoller()
         }
     }
 }

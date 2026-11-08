@@ -30,11 +30,14 @@ final class AppState: ObservableObject {
     @Published var running: [String: RunningTask] = [:]
     /// 每个会话的消息缓存（切走再切回不丢）
     private var sessionItems: [String: [ChatItem]] = [:]
+    /// 服务端权威运行表：sessionId -> ServerRunning
+    @Published var serverRunning: [String: ServerRunning] = [:]
     /// 后台任务的条目缓冲（不参与 @Published，避免流式时狂刷 UI）
     private var taskBuffers: [String: [ChatItem]] = [:]
     /// 流式文本节流缓冲
     private var pendingText: [String: String] = [:]
     private var flushScheduled: Set<String> = []
+    private var runningPoller: Task<Void, Never>?
     /// 任务运行中追加的提示词，等当前任务结束后自动发送
     @Published var pendingPrompts: [String: String] = [:]
 
@@ -42,7 +45,49 @@ final class AppState: ObservableObject {
     var isRunning: Bool { currentRunningTask != nil }
     var runningTaskId: String? { currentRunningTask?.taskId }
     /// 全局在跑的任务数
-    var runningCount: Int { running.count }
+    var runningCount: Int {
+        max(running.count, serverRunning.count)
+    }
+
+    /// 合并后的运行中列表（本地优先，服务端补齐）
+    var mergedRunning: [RunningTask] {
+        var out = Array(running.values)
+        for (sid, sr) in serverRunning where !out.contains(where: { $0.taskId == sr.taskId }) {
+            out.append(RunningTask(taskId: sr.taskId,
+                                   sessionId: sid,
+                                   conversationId: sr.conversationId,
+                                   title: sr.title ?? "",
+                                   startedAt: Date().addingTimeInterval(-Double(sr.elapsed ?? 0))))
+        }
+        return out.sorted { $0.startedAt < $1.startedAt }
+    }
+
+    /// 轮询服务端运行状态（3 秒一次，App 前台时）
+    func startRunningPoller() {
+        runningPoller?.cancel()
+        runningPoller = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                if self.isLoggedIn {
+                    await self.syncRunning()
+                }
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+            }
+        }
+    }
+
+    func syncRunning() async {
+        guard let list = try? await api.runningTasks() else { return }
+        var map: [String: ServerRunning] = [:]
+        for r in list {
+            map[r.sessionId ?? r.taskId] = r
+        }
+        serverRunning = map
+        // 服务端说结束、本地还挂着的 → 收尾
+        for (tid, rt) in running where map[rt.sessionId] == nil {
+            finish(taskId: tid)
+        }
+    }
 
     /// 新会话（还没落库）用的临时 key，初值就有，保证任何时刻都有归属
     private var draftSessionKey = "draft-\(UUID().uuidString)"
@@ -54,7 +99,16 @@ final class AppState: ObservableObject {
 
     var currentRunningTask: RunningTask? {
         let sid = activeSessionKey
-        return running.values.first { $0.sessionId == sid }
+        if let local = running.values.first(where: { $0.sessionId == sid }) {
+            return local
+        }
+        // 本地没有但服务端在跑 → 用服务端信息兜底（App 重启 / 状态漂移时也能显示停止键）
+        guard let sr = serverRunning[sid] else { return nil }
+        return RunningTask(taskId: sr.taskId,
+                           sessionId: sid,
+                           conversationId: sr.conversationId,
+                           title: sr.title ?? "",
+                           startedAt: Date().addingTimeInterval(-Double(sr.elapsed ?? 0)))
     }
 
     /// 正在跑的任务列表（供「运行中」面板）
