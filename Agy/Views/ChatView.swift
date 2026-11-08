@@ -30,6 +30,7 @@ struct ChatView: View {
     @State private var stickBottom = true
     /// 内容总高度（用于侦测高度变化）
     @State private var contentHeight: CGFloat = 0
+    @State private var lastAutoScroll = Date.distantPast
     @State private var turnCursor: Int = -1
     @State private var showModelPicker = false
     @State private var showQuota = false
