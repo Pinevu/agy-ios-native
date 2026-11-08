@@ -87,8 +87,6 @@ struct MarkdownView: View {
                 MathView(latex: tex, display: true, fontSize: 18)
                     .frame(maxWidth: .infinity)
             }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 2)
 
         case .rule:
             Divider().opacity(0.4).padding(.vertical, 4)
