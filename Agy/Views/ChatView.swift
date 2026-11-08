@@ -227,7 +227,7 @@ struct ChatView: View {
                 withAnimation(.easeOut(duration: 0.24)) { showDrawer = true }
             }
         }
-        .padding(.horizontal, 14)
+                .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(Color(.systemBackground))
     }
@@ -277,15 +277,7 @@ struct ChatView: View {
     private var messageList: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 14) {
-                    Color.clear
-                        .frame(height: 0)
-                        .background(
-                            GeometryReader { g in
-                                Color.clear
-                                    .preference(key: ContentHeightKey.self, value: g.frame(in: .named("chatScroll")).maxY)
-                            }
-                        )
+                LazyVStack(alignment: .leading, spacing: 12) {
                     if state.items.isEmpty {
                         if state.loadingSession != nil {
                             loadingState
@@ -307,6 +299,7 @@ struct ChatView: View {
                             }
                         ))
                         .id(item.id)
+                        .heightCached(item.id)
                     }
                     Color.clear
                         .frame(height: 1)
@@ -330,9 +323,17 @@ struct ChatView: View {
                         .id("running")
                     }
                 }
-                .padding(.horizontal, 15)
+                                .padding(.horizontal, 16)
                 .padding(.top, 14)
                 .padding(.bottom, 20)
+                // 量外层 frame 高度：内容不变时高度不变，PreferenceKey 不回传，
+                // 避免流式输出时每帧都触发贴底滚动
+                .background(
+                    GeometryReader { g in
+                        Color.clear.preference(key: ContentHeightKey.self,
+                                               value: g.size.height)
+                    }
+                )
             }
             .modifier(BottomAnchorModifier())
             .coordinateSpace(name: "chatScroll")
@@ -342,7 +343,7 @@ struct ChatView: View {
                 // 内容变高（图片/公式陆续布局完）→ 贴底跟随，但节流，避免滚动死循环
                 guard stickBottom else { return }
                 let now = Date()
-                guard now.timeIntervalSince(lastAutoScroll) > 0.12 else { return }
+                guard now.timeIntervalSince(lastAutoScroll) > 0.35 else { return }
                 lastAutoScroll = now
                 withAnimation(nil) { proxy.scrollTo("bottom-sentinel", anchor: .bottom) }
             }
@@ -366,13 +367,6 @@ struct ChatView: View {
             }
             .onChange(of: state.loadingSession) { loading in
                 if loading == nil { forceScrollToBottom(proxy) }
-            }
-            .onChange(of: state.items.count) { _ in
-                // 贴底状态下有新内容 → 跟到底；否则保持用户当前位置
-                guard stickBottom else { return }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                    withAnimation(nil) { proxy.scrollTo("bottom-sentinel", anchor: .bottom) }
-                }
             }
             .onAppear {
                 // 冷启动直接进长会话：等布局稳定后贴底
@@ -583,7 +577,7 @@ struct ChatView: View {
                             }
                         }
                     }
-                    .padding(.horizontal, 14)
+                    .padding(.horizontal, 16)
                     .padding(.vertical, 8)
                 }
             }
@@ -613,11 +607,16 @@ struct ChatView: View {
                     }
 
                 Button {
+                    let empty = state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        && state.attachments.isEmpty
+                    if empty && !state.isRunning {
+                        // 空内容点发送 → 聚焦输入框，而不是一个点了没反应的灰按钮
+                        inputFocused = true
+                        return
+                    }
                     inputFocused = false
                     Task {
-                        if state.isRunning
-                            && state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                            && state.attachments.isEmpty {
+                        if state.isRunning && empty {
                             // 空输入 + 运行中 = 停止
                             await state.stop()
                         } else if let editing = editingItem {
@@ -640,8 +639,7 @@ struct ChatView: View {
                         .background(buttonColor)
                         .clipShape(Circle())
                 }
-                .buttonStyle(.plain)
-                .disabled(!isQueueMode && !state.isRunning && state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && state.attachments.isEmpty)
+                .buttonStyle(PressableButtonStyle())
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
@@ -654,7 +652,7 @@ struct ChatView: View {
                             lineWidth: inputFocused ? 1.6 : 1.2)
             )
             .shadow(color: .black.opacity(inputFocused ? 0.05 : 0.03), radius: 8, y: 2)
-            .padding(.horizontal, 14)
+                        .padding(.horizontal, 16)
             .padding(.top, 6)
             .padding(.bottom, 8)
 
@@ -753,7 +751,7 @@ struct ChatView: View {
                 .frame(height: 62)
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressableButtonStyle())
 
             Button {
                 Task { await state.stop(taskId: rt.taskId) }
