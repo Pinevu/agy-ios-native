@@ -330,8 +330,15 @@ final class AppState: ObservableObject {
         if ok {
             isLoggedIn = true
             await refreshSessions()
-            if currentSession == nil, let first = sessions.first {
-                await open(first)
+            if currentSession == nil {
+                let lastId = UserDefaults.standard.string(forKey: "agy_last_session")
+                if lastId == "draft" {
+                    // 上次停在新建对话 → 保持空白页
+                } else if let lastId, let target = sessions.first(where: { $0.id == lastId }) {
+                    await open(target)          // 回到上次那页
+                } else if let first = sessions.first {
+                    await open(first)
+                }
             }
         } else {
             api.setToken(nil)
@@ -379,6 +386,7 @@ final class AppState: ObservableObject {
         }
         draftSessionKey = "draft-\(UUID().uuidString)"
         currentSession = session
+        UserDefaults.standard.set(session.id, forKey: "agy_last_session")
         conversationId = session.conversationId
         assistantIndex = nil
 
@@ -410,6 +418,7 @@ final class AppState: ObservableObject {
     func newSession() {
         if let cur = currentSession?.id { sessionItems[cur] = items }
         draftSessionKey = "draft-\(UUID().uuidString)"
+        UserDefaults.standard.set("draft", forKey: "agy_last_session")
         currentSession = nil
         conversationId = nil
         items = []

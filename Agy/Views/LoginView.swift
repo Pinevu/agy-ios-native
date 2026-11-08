@@ -5,6 +5,7 @@ struct LoginView: View {
     @State private var password = ""
     @State private var showPassword = false
     @FocusState private var focused: Bool
+    @State private var showInstances = false
 
     var body: some View {
         ZStack {
@@ -83,6 +84,28 @@ struct LoginView: View {
                     .disabled(state.isLoggingIn || password.isEmpty)
                     .padding(.top, 18)
 
+                    // 当前实例 + 切换入口（登录失败/选错实例时不用卡死）
+                    HStack(spacing: 7) {
+                        Circle()
+                            .fill(Color.secondary.opacity(0.35))
+                            .frame(width: 7, height: 7)
+                        Text(state.currentInstance.name)
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        Button {
+                            focused = false
+                            showInstances = true
+                        } label: {
+                            Text("切换实例")
+                                .font(.system(size: 12.5, weight: .semibold))
+                                .foregroundStyle(Color.accentColor)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 18)
+
                     Spacer(minLength: 40)
                 }
                 .padding(.horizontal, 24)
@@ -92,6 +115,11 @@ struct LoginView: View {
             .scrollDismissesKeyboard(.interactively)
         }
         .onAppear { focused = true }
+        .sheet(isPresented: $showInstances) {
+            InstancesSheet()
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
     }
 
     private func submit() {

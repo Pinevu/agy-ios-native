@@ -26,6 +26,8 @@ struct ChatView: View {
     @State private var photoItem: PhotosPickerItem?
     @State private var showPhotoPicker = false
     @State private var showFileImporter = false
+    @State private var showCamera = false
+    @State private var capturedImage: UIImage?
     @FocusState private var inputFocused: Bool
     @State private var editingItem: ChatItem?
     @State private var editingPaths: [String] = []
@@ -96,9 +98,22 @@ struct ChatView: View {
         .sheet(isPresented: $showModelPicker) { modelSheet }
         .sheet(isPresented: $showQuota) { QuotaSheet() }
         .confirmationDialog("添加附件", isPresented: $showAttach, titleVisibility: .visible) {
+            Button("拍照") { showCamera = true }
             Button("照片图库") { showPhotoPicker = true }
             Button("文件") { showFileImporter = true }
             Button("取消", role: .cancel) {}
+        }
+        .fullScreenCover(isPresented: $showCamera) {
+            CameraPicker(image: $capturedImage)
+                .ignoresSafeArea()
+        }
+        .onChange(of: capturedImage) { img in
+            guard let img else { return }
+            if let data = img.jpegData(compressionQuality: 0.85) {
+                state.attachments.append(.init(name: "photo_\(Int(Date().timeIntervalSince1970)).jpg",
+                                               data: data, isImage: true))
+            }
+            capturedImage = nil
         }
         .photosPicker(isPresented: $showPhotoPicker, selection: $photoItem, matching: .images)
         .onChange(of: photoItem) { item in
