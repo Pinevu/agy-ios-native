@@ -2,7 +2,7 @@ name: Agy
 options:
   bundleIdPrefix: cc.nooh
   deploymentTarget:
-    iOS: "16.1"
+    iOS: "16.2"
   createIntermediateGroups: true
   groupSortPosition: top
 

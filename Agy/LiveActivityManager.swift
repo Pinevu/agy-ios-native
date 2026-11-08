@@ -12,13 +12,13 @@ final class LiveActivityManager {
     private var state = AgyActivityAttributes.ContentState(title: "", elapsed: 0, step: "正在启动…", running: true)
 
     private var available: Bool {
-        if #available(iOS 16.1, *) { return ActivityAuthorizationInfo().areActivitiesEnabled }
+        if #available(iOS 16.2, *) { return ActivityAuthorizationInfo().areActivitiesEnabled }
         return false
     }
 
     /// 任务开始：没有活动就新建，有就更新
     func start(title: String, step: String = "正在思考…") {
-        guard available, #available(iOS 16.1, *) else { return }
+        guard available, #available(iOS 16.2, *) else { return }
 
         if activity == nil {
             startedAt = Date()
@@ -35,7 +35,7 @@ final class LiveActivityManager {
     }
 
     func update(title: String? = nil, step: String? = nil, running: Bool? = nil) {
-        guard available, #available(iOS 16.1, *) else { return }
+        guard available, #available(iOS 16.2, *) else { return }
         guard let act = activity else { return }
         if let t = title, !t.isEmpty { state.title = t }
         if let s = step, !s.isEmpty { state.step = s }
@@ -46,7 +46,7 @@ final class LiveActivityManager {
 
     /// 任务结束：显示一次完成态，随后自动消失
     func end(step: String = "已完成") {
-        guard available, #available(iOS 16.1, *) else { return }
+        guard available, #available(iOS 16.2, *) else { return }
         guard let act = activity else { return }
         stopTicker()
         state.step = step
@@ -55,7 +55,7 @@ final class LiveActivityManager {
         Task {
             await act.update(.init(state: state, staleDate: nil))
             try? await Task.sleep(nanoseconds: 3_000_000_000)
-            await act.end(content: .init(state: state, staleDate: nil),
+            await act.end(.init(state: state, staleDate: nil),
                           dismissalPolicy: .after(Date().addingTimeInterval(4)))
             await MainActor.run { self.activity = nil }
         }
