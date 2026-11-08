@@ -38,11 +38,16 @@ final class AppState: ObservableObject {
     /// 全局在跑的任务数
     var runningCount: Int { running.count }
 
+    /// 新会话（还没落库）用的临时 key，避免和别的会话串台
+    private var draftSessionKey: String?
+
+    /// 当前会话自己的 key
+    var activeSessionKey: String? {
+        currentSession?.id ?? draftSessionKey
+    }
+
     var currentRunningTask: RunningTask? {
-        guard let sid = currentSession?.id else {
-            // 新会话：只要有一个在跑就算（发送键显示停止）
-            return running.values.first
-        }
+        guard let sid = activeSessionKey else { return nil }
         return running.values.first { $0.sessionId == sid }
     }
     @Published var conversationId: String?
@@ -288,6 +293,7 @@ final class AppState: ObservableObject {
         if let cur = currentSession?.id, cur != session.id {
             sessionItems[cur] = items
         }
+        draftSessionKey = nil
         currentSession = session
         conversationId = session.conversationId
         assistantIndex = nil
@@ -316,6 +322,7 @@ final class AppState: ObservableObject {
 
     func newSession() {
         if let cur = currentSession?.id { sessionItems[cur] = items }
+        draftSessionKey = UUID().uuidString
         currentSession = nil
         conversationId = nil
         items = []
@@ -372,7 +379,7 @@ final class AppState: ObservableObject {
                 items[idx].taskId = r.id
             }
             // 登记为并发任务
-            let sid = currentSession?.id ?? r.id
+            let sid = activeSessionKey ?? r.id
             running[r.id] = RunningTask(taskId: r.id,
                                         sessionId: sid,
                                         conversationId: conversationId,
@@ -601,6 +608,12 @@ final class AppState: ObservableObject {
 
         default:
             break
+        }
+
+        // 关键：当前会话的改动也要回写任务缓冲，finish() 才不会拿旧副本覆盖
+        running[taskId]?.items = items
+        if let sid = running[taskId]?.sessionId {
+            sessionItems[sid] = items
         }
     }
 
