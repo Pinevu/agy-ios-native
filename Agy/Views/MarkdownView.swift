@@ -6,7 +6,8 @@ import UIKit
 struct MarkdownView: View {
     let text: String
 
-    private var blocks: [MDBlock] { MarkdownParser.parse(text) }
+    /// 解析结果缓存：只在 text 变化时重算，滚动/父视图刷新不再重复解析
+    @State private var blocks: [MDBlock] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
@@ -15,6 +16,9 @@ struct MarkdownView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .task(id: text) {
+            blocks = MarkdownParser.parse(text)
+        }
     }
 
     @ViewBuilder
@@ -347,6 +351,8 @@ struct AuthImage: View {
     /// 最大展示宽度（默认铺满可用宽度）
     var maxWidth: CGFloat = .infinity
     var corner: CGFloat = 12
+    /// 列表里用缩略图，点开才拉原图
+    var thumbWidth: Int = 600
 
     @State private var image: UIImage?
     @State private var loading = true
@@ -398,7 +404,7 @@ struct AuthImage: View {
             let isBareName = !path.contains("/")
             let img: UIImage?
             if isBareName, let tid = taskId {
-                img = await APIClient.shared.loadTaskImage(taskId: tid, name: path)
+                img = await APIClient.shared.loadTaskImage(taskId: tid, name: path, width: thumbWidth)
             } else {
                 img = await APIClient.shared.loadImage(path: path)
             }

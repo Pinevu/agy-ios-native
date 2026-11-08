@@ -181,25 +181,29 @@ final class APIClient {
 
     private var imageCache = NSCache<NSString, UIImage>()
 
-    func imageURL(path: String) -> URL? {
+    func imageURL(path: String, width: Int = 0) -> URL? {
         var comp = URLComponents(url: baseURL.appendingPathComponent("api/file"), resolvingAgainstBaseURL: false)
-        comp?.queryItems = [URLQueryItem(name: "path", value: path)]
+        var items = [URLQueryItem(name: "path", value: path)]
+        if width > 0 { items.append(URLQueryItem(name: "w", value: "\(width)")) }
+        comp?.queryItems = items
         return comp?.url
     }
 
     /// 任务产物文件：/api/files?id=<taskId>&name=<filename>
-    func taskFileURL(taskId: String, name: String) -> URL? {
+    func taskFileURL(taskId: String, name: String, width: Int = 0) -> URL? {
         var comp = URLComponents(url: baseURL.appendingPathComponent("api/file"),
                                  resolvingAgainstBaseURL: false)
-        comp?.queryItems = [URLQueryItem(name: "id", value: taskId),
-                            URLQueryItem(name: "name", value: name)]
+        var items = [URLQueryItem(name: "id", value: taskId),
+                     URLQueryItem(name: "name", value: name)]
+        if width > 0 { items.append(URLQueryItem(name: "w", value: "\(width)")) }
+        comp?.queryItems = items
         return comp?.url
     }
 
-    func loadTaskImage(taskId: String, name: String) async -> UIImage? {
-        let key = "\(taskId)/\(name)" as NSString
+    func loadTaskImage(taskId: String, name: String, width: Int = 0) async -> UIImage? {
+        let key = "\(taskId)/\(name)/\(width)" as NSString
         if let cached = imageCache.object(forKey: key) { return cached }
-        guard let url = taskFileURL(taskId: taskId, name: name) else { return nil }
+        guard let url = taskFileURL(taskId: taskId, name: name, width: width) else { return nil }
         var req = URLRequest(url: url)
         if let t = token { req.setValue("Bearer \(t)", forHTTPHeaderField: "Authorization") }
         guard let (data, resp) = try? await session.data(for: req),

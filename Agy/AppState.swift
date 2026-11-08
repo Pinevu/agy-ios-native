@@ -71,7 +71,10 @@ final class AppState: ObservableObject {
                 if self.isLoggedIn {
                     await self.syncRunning()
                 }
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                // 有任务在跑 → 2 秒一查；空闲 → 8 秒（省电、省请求）
+                let ns: UInt64 = self.running.isEmpty && self.serverRunning.isEmpty
+                    ? 8_000_000_000 : 2_000_000_000
+                try? await Task.sleep(nanoseconds: ns)
             }
         }
     }
