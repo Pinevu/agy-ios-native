@@ -293,7 +293,6 @@ struct ChatView: View {
 
     // MARK: - 悬浮滚动按钮
 
-    @ViewBuilder
     /// 内容就绪后贴底：分三段延迟重试，躲开图片/公式的布局耗时
     private func scrollToBottomAfterLoad(_ proxy: ScrollViewProxy) {
         guard !showBackToBottom else { return }
@@ -308,6 +307,7 @@ struct ChatView: View {
         }
     }
 
+    @ViewBuilder
     private func floatingButtons(_ proxy: ScrollViewProxy) -> some View {
         if showBackToBottom {
             VStack(spacing: 8) {
