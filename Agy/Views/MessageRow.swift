@@ -77,7 +77,7 @@ struct MessageRow: View {
         case .images(let paths):
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(paths, id: \.self) { p in
-                    AuthImage(path: p)
+                    AuthImage(path: p, taskId: item.taskId)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

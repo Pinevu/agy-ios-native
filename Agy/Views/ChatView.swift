@@ -250,6 +250,7 @@ struct ChatView: View {
                 floatingButtons(proxy)
                     .padding(.trailing, 12)
                     .padding(.bottom, 10)
+                    .animation(.easeOut(duration: 0.18), value: showBackToBottom)
             }
             .onChange(of: state.items.count) { _ in
                 if let last = state.items.last {
@@ -318,10 +319,12 @@ struct ChatView: View {
         Image(systemName: name)
             .font(.system(size: 14, weight: .semibold))
             .foregroundStyle(.primary)
-            .frame(width: 36, height: 36)
-            .background(.regularMaterial, in: Circle())
-            .overlay(Circle().stroke(Color.primary.opacity(0.08), lineWidth: 0.8))
-            .shadow(color: .black.opacity(0.10), radius: 6, y: 2)
+            .frame(width: 38, height: 38)
+            .background(
+                Circle().fill(Color(.systemBackground))
+                    .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
+            )
+            .overlay(Circle().stroke(Color.primary.opacity(0.10), lineWidth: 0.8))
     }
 
     /// 返回（索引, 上一条用户消息），从当前游标往前找

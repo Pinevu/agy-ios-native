@@ -472,7 +472,7 @@ final class AppState: ObservableObject {
         case "end":
             assistantIndex = nil
             if let imgs = ev.images, !imgs.isEmpty {
-                items.append(ChatItem(kind: .images(imgs)))
+                items.append(ChatItem(kind: .images(imgs), taskId: ev.taskId))
             }
             if let e = ev.error, !e.isEmpty {
                 items.append(ChatItem(kind: .error(text: e)))
@@ -536,7 +536,7 @@ final class AppState: ObservableObject {
             case "end":
                 assistantIndex = nil
                 if let imgs = ev.images, !imgs.isEmpty {
-                    items.append(ChatItem(kind: .images(imgs)))
+                    items.append(ChatItem(kind: .images(imgs), taskId: ev.taskId))
                 }
             default:
                 break

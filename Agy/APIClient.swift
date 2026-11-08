@@ -182,6 +182,28 @@ final class APIClient {
         return comp?.url
     }
 
+    /// 任务产物文件：/api/files?id=<taskId>&name=<filename>
+    func taskFileURL(taskId: String, name: String) -> URL? {
+        var comp = URLComponents(url: baseURL.appendingPathComponent("api/files"),
+                                 resolvingAgainstBaseURL: false)
+        comp?.queryItems = [URLQueryItem(name: "id", value: taskId),
+                            URLQueryItem(name: "name", value: name)]
+        return comp?.url
+    }
+
+    func loadTaskImage(taskId: String, name: String) async -> UIImage? {
+        let key = "\(taskId)/\(name)" as NSString
+        if let cached = imageCache.object(forKey: key) { return cached }
+        guard let url = taskFileURL(taskId: taskId, name: name) else { return nil }
+        var req = URLRequest(url: url)
+        if let t = token { req.setValue("Bearer \(t)", forHTTPHeaderField: "Authorization") }
+        guard let (data, resp) = try? await session.data(for: req),
+              let http = resp as? HTTPURLResponse, http.statusCode == 200,
+              let img = UIImage(data: data) else { return nil }
+        imageCache.setObject(img, forKey: key)
+        return img
+    }
+
     func loadImage(path: String) async -> UIImage? {
         let key = path as NSString
         if let cached = imageCache.object(forKey: key) { return cached }

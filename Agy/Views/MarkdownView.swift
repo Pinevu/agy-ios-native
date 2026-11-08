@@ -77,7 +77,16 @@ struct MarkdownView: View {
             CodeBlockView(lang: lang, code: code)
 
         case .math(let tex):
-            RichParaView(segments: [.math(tex)], fontSize: 17, align: .center)
+            if LatexToUnicode.canSimplify(tex) {
+                Text(LatexToUnicode.convert(tex))
+                    .font(.system(size: 18, design: .serif))
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 6)
+            } else {
+                MathView(latex: tex, display: true, fontSize: 18)
+                    .frame(maxWidth: .infinity)
+            }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 2)
 
@@ -205,17 +214,43 @@ struct ParagraphView: View {
         segs.contains { if case .math = $0 { return true } else { return false } }
     }
 
-    private var allMathNative: Bool {
-        segs.allSatisfy { seg in
-            if case .math(let t) = seg { return MathCapability.canRenderNative(t) }
-            return true
+    /// 行内公式统一转 Unicode 走原生 Text：零渲染风险，滚动跟手
+    private var hasInlineMath: Bool { hasMath }
+
+    /// 把公式转成 Unicode 后拼进 AttributedString，用系统字体排
+    private var attributedWithMath: AttributedString {
+        var out = AttributedString()
+        for seg in segs {
+            switch seg {
+            case .text(let t, let bold, let code):
+                var a = AttributedString(t)
+                if code {
+                    a.font = .system(size: 14.5, design: .monospaced)
+                    a.foregroundColor = .accentColor
+                } else {
+                    a.font = .system(size: 16, weight: bold ? .semibold : .regular)
+                }
+                out.append(a)
+            case .math(let tex):
+                var a = AttributedString(LatexToUnicode.convert(tex))
+                // 公式用衬线体，与正文区分开
+                a.font = .system(size: 16.5, design: .serif)
+                a.foregroundColor = .primary
+                out.append(a)
+            case .image:
+                continue
+            }
         }
+        return out
     }
 
     var body: some View {
-        if hasMath && !allMathNative {
-            // 有 SwiftMath 解析不了的公式：整段交给 KaTeX，保证排版完整
-            RichParaView(segments: segs, fontSize: 16)
+        if hasMath {
+            // 行内公式一律转 Unicode：用原生 Text 混排，速度最快且不会崩
+            Text(attributedWithMath)
+                .lineSpacing(4)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
         } else if needsFlow {
             FlowLayout(spacing: 3, lineSpacing: 7) {
                 ForEach(segs) { seg in segView(seg) }
@@ -309,6 +344,8 @@ struct CodeBlockView: View {
 
 struct AuthImage: View {
     let path: String
+    /// 只传了文件名时，用它拼 /api/files?id=&name=
+    var taskId: String? = nil
     /// 最大展示宽度（默认铺满可用宽度）
     var maxWidth: CGFloat = .infinity
     var corner: CGFloat = 12
@@ -323,7 +360,7 @@ struct AuthImage: View {
                 Image(uiImage: img)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
-                    .frame(maxWidth: maxWidth == .infinity ? nil : maxWidth)
+                    .frame(maxWidth: maxWidth, alignment: .leading)
                     .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: corner, style: .continuous)
@@ -354,7 +391,13 @@ struct AuthImage: View {
         .task {
             guard image == nil else { return }
             loading = true
-            let img = await APIClient.shared.loadImage(path: path)
+            let isBareName = !path.contains("/")
+            let img: UIImage?
+            if isBareName, let tid = taskId {
+                img = await APIClient.shared.loadTaskImage(taskId: tid, name: path)
+            } else {
+                img = await APIClient.shared.loadImage(path: path)
+            }
             await MainActor.run {
                 image = img
                 loading = false

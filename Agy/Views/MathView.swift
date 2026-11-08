@@ -7,30 +7,29 @@ import SwiftMath
 
 enum MathCapability {
     /// SwiftMath 能否解析；能就原生渲染（快、排版贴合），不能则回退 KaTeX
+    /// 只有「完全不含反斜杠命令」的极简公式才走 SwiftMath 原生。
+    /// 一旦出现 \frac / \leqslant / \begin 等，全部交给 KaTeX ——
+    /// SwiftMath 1.7.x 在这些地方会在布局阶段抛异常直接杀进程。
     static func canRenderNative(_ tex: String) -> Bool {
         let t = tex.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !t.isEmpty, t.count <= 200 else { return false }
-
-        // 含中文 / 日文：字体缺字，布局阶段容易崩
+        guard !t.isEmpty, t.count <= 60 else { return false }
+        // 含反斜杠 = 有 LaTeX 命令，一律不碰原生
+        if t.contains("\\") { return false }
+        // 中文 / 日文：字体缺字
         for sc in t.unicodeScalars {
             let v = sc.value
             if (0x4E00...0x9FFF).contains(v) || (0x3040...0x30FF).contains(v) { return false }
         }
-
-        // 这些环境 SwiftMath 1.7.x 支持不完整，交给 KaTeX
-        let risky = ["\\begin", "\\end", "\\over", "\\displaystyle",
-                     "\\text", "\\textbf", "\\mathrm", "\\mathbb",
-                     "\\tag", "\\hline", "\\substack", "\\\\"]
-        for r in risky where t.contains(r) { return false }
-
-        // 括号必须配对，否则解析器内部越界
+        // 只允许这些字符：字母数字、空白、四则运算、等号不等号、上下标、括号、逗号句点
+        let allowed = CharacterSet(charactersIn:
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 +-*/=<>^_()[]{}.,:;!|'\"")
+        let extra = CharacterSet(charactersIn: "±×÷≤≥≠≈∞∑∫√πθαβγΔΣΩ∅∩∪∈∉⊂⊆")
+        for u in t.unicodeScalars {
+            if !allowed.contains(u) && !extra.contains(u) { return false }
+        }
+        // 括号必须配对
         if t.filter({ $0 == "{" }).count != t.filter({ $0 == "}" }).count { return false }
         if t.filter({ $0 == "(" }).count != t.filter({ $0 == ")" }).count { return false }
-        if t.filter({ $0 == "[" }).count != t.filter({ $0 == "]" }).count { return false }
-
-        // 反斜杠命令必须合法结尾（\frac 后面紧跟 } 之类是坏的）
-        if t.hasSuffix("\\") { return false }
-
         return MTMathListBuilder.build(fromString: t) != nil
     }
 }
