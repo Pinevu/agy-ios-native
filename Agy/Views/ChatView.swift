@@ -6,6 +6,7 @@ struct ChatView: View {
     @EnvironmentObject var state: AppState
 
     @State private var showDrawer = false
+    @State private var showRunningList = false
     @State private var showBackToBottom = false
     @State private var turnCursor: Int = -1
     @State private var showModelPicker = false
@@ -559,59 +560,12 @@ struct ChatView: View {
         NavigationStack {
             Group {
                 if state.runningList.isEmpty {
-                    VStack(spacing: 10) {
-                        Image(systemName: "checkmark.circle")
-                            .font(.system(size: 34))
-                            .foregroundStyle(.tertiary)
-                        Text("没有正在运行的任务")
-                            .font(.system(size: 14))
-                            .foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    runningEmpty
                 } else {
                     ScrollView {
                         VStack(spacing: 0) {
                             ForEach(state.runningList, id: \.taskId) { rt in
-                                HStack(spacing: 11) {
-                                    ProgressView()
-                                        .scaleEffect(0.7)
-                                        .frame(width: 18)
-
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text(rt.title.isEmpty ? "新任务" : rt.title)
-                                            .font(.system(size: 14.5, weight: .medium))
-                                            .lineLimit(1)
-                                        Text(elapsedText(rt.startedAt))
-                                            .font(.system(size: 11.5))
-                                            .foregroundStyle(.tertiary)
-                                    }
-
-                                    Spacer(minLength: 8)
-
-                                    Button {
-                                        Task { await state.stop(taskId: rt.taskId) }
-                                    } label: {
-                                        Image(systemName: "stop.fill")
-                                            .font(.system(size: 12, weight: .bold))
-                                            .foregroundStyle(.white)
-                                            .frame(width: 28, height: 28)
-                                            .background(Color.red, in: Circle())
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                                .padding(.horizontal, 18)
-                                .frame(height: 62)
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    showRunningList = false
-                                    if let s = state.sessions.first(where: { $0.id == rt.sessionId }) {
-                                        Task { await state.open(s) }
-                                    }
-                                }
-
-                                if rt.taskId != state.runningList.last?.taskId {
-                                    Divider().opacity(0.35).padding(.leading, 47)
-                                }
+                                runningRow(rt)
                             }
                         }
                         .padding(.top, 6)
@@ -630,11 +584,70 @@ struct ChatView: View {
         .presentationDragIndicator(.visible)
     }
 
+    private var runningEmpty: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "checkmark.circle")
+                .font(.system(size: 34))
+                .foregroundStyle(.tertiary)
+            Text("没有正在运行的任务")
+                .font(.system(size: 14))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder
+    private func runningRow(_ rt: RunningTask) -> some View {
+        HStack(spacing: 11) {
+            ProgressView()
+                .scaleEffect(0.7)
+                .frame(width: 18)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(rt.title.isEmpty ? "新任务" : rt.title)
+                    .font(.system(size: 14.5, weight: .medium))
+                    .lineLimit(1)
+                Text(elapsedText(rt.startedAt))
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.tertiary)
+            }
+
+            Spacer(minLength: 8)
+
+            Button {
+                Task { await state.stop(taskId: rt.taskId) }
+            } label: {
+                Image(systemName: "stop.fill")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 28, height: 28)
+                    .background(Color.red, in: Circle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 18)
+        .frame(height: 62)
+        .contentShape(Rectangle())
+        .onTapGesture { jumpToRunning(rt) }
+        .overlay(alignment: .bottom) {
+            if rt.taskId != state.runningList.last?.taskId {
+                Divider().opacity(0.35).padding(.leading, 47)
+            }
+        }
+    }
+
+    private func jumpToRunning(_ rt: RunningTask) {
+        showRunningList = false
+        if let target = state.sessions.first(where: { $0.id == rt.sessionId }) {
+            Task { await state.open(target) }
+        }
+    }
+
     private func elapsedText(_ start: Date) -> String {
-        let s = Int(Date().timeIntervalSince(start))
-        if s < 60 { return "\(s) 秒" }
-        if s < 3600 { return "\(s / 60) 分 \(s % 60) 秒" }
-        return "\(s / 3600) 小时 \((s % 3600) / 60) 分"
+        let total = max(0, Int(Date().timeIntervalSince(start)))
+        if total < 60 { return "\(total) 秒" }
+        if total < 3600 { return "\(total / 60) 分 \(total % 60) 秒" }
+        return "\(total / 3600) 小时 \((total % 3600) / 60) 分"
     }
 
     private var modelSheet: some View {

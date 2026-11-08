@@ -304,7 +304,7 @@ final class AppState: ObservableObject {
         if let cur = currentSession?.id, cur != session.id {
             sessionItems[cur] = items
         }
-        draftSessionKey = nil
+        draftSessionKey = "draft-\(UUID().uuidString)"
         currentSession = session
         conversationId = session.conversationId
         assistantIndex = nil
@@ -334,7 +334,7 @@ final class AppState: ObservableObject {
 
     func newSession() {
         if let cur = currentSession?.id { sessionItems[cur] = items }
-        draftSessionKey = UUID().uuidString
+        draftSessionKey = "draft-\(UUID().uuidString)"
         currentSession = nil
         conversationId = nil
         items = []
@@ -594,9 +594,12 @@ final class AppState: ObservableObject {
             break
         }
         taskBuffers[taskId] = buf
-        if let c = ev.conversationId, !c.isEmpty { rt.conversationId = c }
-        running[taskId] = rt
-        sessionItems[rt.sessionId] = buf
+        if let c = ev.conversationId, !c.isEmpty {
+            running[taskId]?.conversationId = c
+        }
+        if let sid = running[taskId]?.sessionId {
+            sessionItems[sid] = buf
+        }
     }
 
     private func handle(_ ev: ChatEvent, taskId: String) {
@@ -626,14 +629,6 @@ final class AppState: ObservableObject {
             pendingText[taskId, default: ""] += t
             scheduleFlush(taskId: taskId)
             return
-            if let idx = assistantIndex, idx < items.count {
-                if case .assistant(let old) = items[idx].kind {
-                    items[idx].kind = .assistant(text: old + t)
-                    return
-                }
-            }
-            items.append(ChatItem(kind: .assistant(text: t)))
-            assistantIndex = items.count - 1
 
         case "thought":
             guard let t = ev.text, !t.isEmpty else { return }
