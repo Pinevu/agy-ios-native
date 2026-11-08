@@ -80,17 +80,31 @@ final class AppState: ObservableObject {
     }
 
     func syncRunning() async {
-        guard let list = try? await api.runningTasks() else { return }
+        guard let snap = try? await api.runningTasks() else { return }
+
         var map: [String: ServerRunning] = [:]
-        for r in list {
+        for r in snap.running {
             map[r.sessionId ?? r.taskId] = r
         }
         serverRunning = map
-        // 服务端说结束、本地还挂着的 → 收尾
+
+        // 服务端说结束、本地还挂着的 → 收尾（finish 内部会补拉一次）
         for (tid, rt) in running where map[rt.sessionId] == nil {
             finish(taskId: tid)
         }
+
+        // 服务端刚刚结束、但本地根本没收到 end 的 → 直接补拉该会话
+        let known = Set(running.values.map { $0.sessionId })
+        for r in snap.recent {
+            guard let sid = r.sessionId, !known.contains(sid) else { continue }
+            guard lastReconciled[sid] == nil else { continue }
+            lastReconciled[sid] = Date()
+            await reconcile(sessionId: sid)
+        }
     }
+
+    /// 防止同一会话反复补拉
+    private var lastReconciled: [String: Date] = [:]
 
     /// 新会话（还没落库）用的临时 key，初值就有，保证任何时刻都有归属
     private var draftSessionKey = "draft-\(UUID().uuidString)"
@@ -564,6 +578,20 @@ final class AppState: ObservableObject {
     private func finish(taskId: String) {
         guard let rt = running[taskId] else { return }
         let sid = rt.sessionId
+
+        // 收尾前把攒着的文本先落地，避免最后一段丢失
+        if !(pendingText[taskId] ?? "").isEmpty {
+            let chunk = pendingText[taskId] ?? ""
+            pendingText[taskId] = ""
+            var b = taskBuffers[taskId] ?? (activeSessionKey == sid ? items : [])
+            if let last = b.indices.last, case .assistant(let old) = b[last].kind {
+                b[last].kind = .assistant(text: old + chunk)
+            } else {
+                b.append(ChatItem(kind: .assistant(text: chunk)))
+            }
+            taskBuffers[taskId] = b
+        }
+
         let buf = taskBuffers[taskId] ?? items
         sessionItems[sid] = buf
         if activeSessionKey == sid {
@@ -579,6 +607,28 @@ final class AppState: ObservableObject {
             Task { await self.send() }
         }
         Task { await refreshSessions() }
+
+        // 收尾后补拉一次：SSE 提前断开时，最后那段内容只有服务端有
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            guard let self else { return }
+            guard self.running[taskId] == nil else { return }
+            await self.reconcile(sessionId: sid)
+        }
+    }
+
+    /// 用服务端权威数据校正某个会话（SSE 断流、丢事件时自愈）
+    private func reconcile(sessionId sid: String) async {
+        guard let events = try? await api.replay(sid) else { return }
+        let snapshot = buildItems(events)
+        sessionItems[sid] = snapshot
+        if activeSessionKey == sid {
+            // 只有内容确实变多/变完整时才替换，避免无谓闪烁
+            if snapshot.count >= items.count {
+                items = snapshot
+                assistantIndex = nil
+            }
+        }
     }
 
     // MARK: - 事件
@@ -599,7 +649,19 @@ final class AppState: ObservableObject {
     private func flushText(taskId: String) {
         guard let chunk = pendingText[taskId], !chunk.isEmpty else { return }
         pendingText[taskId] = ""
-        guard running[taskId] != nil else { return }
+
+        // 任务可能已经收尾（SSE 先断、end 后到），此时不能再丢文本，
+        // 直接写进缓冲，随后由补拉或下次 replay 校正。
+        if running[taskId] == nil {
+            var buf = taskBuffers[taskId] ?? []
+            if let last = buf.indices.last, case .assistant(let old) = buf[last].kind {
+                buf[last].kind = .assistant(text: old + chunk)
+            } else {
+                buf.append(ChatItem(kind: .assistant(text: chunk)))
+            }
+            taskBuffers[taskId] = buf
+            return
+        }
 
         let isCurrent = activeSessionKey == running[taskId]?.sessionId
         if isCurrent {
@@ -771,8 +833,12 @@ final class AppState: ObservableObject {
     }
 
     private func apply(_ events: [ChatEvent], live: Bool) {
-        // 关键：先构建局部数组，最后一次性赋值。
-        // 原来每条事件都改 self.items，4000 条事件 = 4000 次 @Published → 界面卡死。
+        items = buildItems(events)
+        assistantIndex = nil
+    }
+
+    /// 纯函数：把事件流构建成消息列表（批量，只赋值一次）
+    private func buildItems(_ events: [ChatEvent]) -> [ChatItem] {
         var out: [ChatItem] = []
         var assistant: Int? = nil
 
@@ -830,15 +896,25 @@ final class AppState: ObservableObject {
             case "end":
                 assistant = nil
                 if let imgs = ev.images, !imgs.isEmpty {
-                    out.append(ChatItem(kind: .images(imgs), taskId: ev.taskId))
+                    var shown = Set<String>()
+                    for it in out {
+                        if case .assistant(let t) = it.kind {
+                            for m in t.matches(of: /!\[[^\]]*\]\(([^)]+)\)/) {
+                                shown.insert(baseName(String(m.output.1)))
+                            }
+                        }
+                    }
+                    let fresh = imgs.filter { !shown.contains(baseName($0)) }
+                    if !fresh.isEmpty {
+                        out.append(ChatItem(kind: .images(fresh), taskId: ev.taskId))
+                    }
                 }
             default:
                 break
             }
         }
 
-        items = out
-        assistantIndex = nil
+        return out
     }
 
     // MARK: - 工具

@@ -273,6 +273,10 @@ struct ChatView: View {
             }
             .onChange(of: state.currentSession?.id) { _ in
                 turnCursor = -1
+                scrollToBottomAfterLoad(proxy)
+            }
+            .onChange(of: state.loadingSession) { loading in
+                if loading == nil { scrollToBottomAfterLoad(proxy) }
             }
             .onChange(of: state.items.count) { _ in
                 // 首次加载完整批到达（没有本地缓存）时补一次贴底
@@ -290,6 +294,20 @@ struct ChatView: View {
     // MARK: - 悬浮滚动按钮
 
     @ViewBuilder
+    /// 内容就绪后贴底：分三段延迟重试，躲开图片/公式的布局耗时
+    private func scrollToBottomAfterLoad(_ proxy: ScrollViewProxy) {
+        guard !showBackToBottom else { return }
+        for delay in [0.05, 0.25, 0.6] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                if !showBackToBottom {
+                    withAnimation(nil) {
+                        proxy.scrollTo("bottom-sentinel", anchor: .bottom)
+                    }
+                }
+            }
+        }
+    }
+
     private func floatingButtons(_ proxy: ScrollViewProxy) -> some View {
         if showBackToBottom {
             VStack(spacing: 8) {

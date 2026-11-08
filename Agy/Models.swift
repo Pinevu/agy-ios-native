@@ -82,6 +82,25 @@ struct ChatEvent: Decodable {
     }
 }
 
+// MARK: - 服务端运行态快照
+
+struct RunningSnapshot: Decodable {
+    let running: [ServerRunning]
+    let recent: [ServerRecent]
+}
+
+struct ServerRecent: Decodable {
+    let taskId: String
+    let sessionId: String?
+    let endedAgo: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case taskId = "task_id"
+        case sessionId = "session_id"
+        case endedAgo = "ended_ago"
+    }
+}
+
 // MARK: - 服务端运行中任务
 
 struct ServerRunning: Decodable {
