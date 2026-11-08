@@ -55,6 +55,7 @@ struct ChatView: View {
         }
         .animation(.easeInOut(duration: 0.2), value: state.toast)
         .animation(.easeOut(duration: 0.24), value: showDrawer)
+        .sheet(isPresented: $showRunningList) { runningSheet }
         .sheet(isPresented: $showModelPicker) { modelSheet }
         .sheet(isPresented: $showQuota) { QuotaSheet() }
         .confirmationDialog("添加附件", isPresented: $showAttach, titleVisibility: .visible) {
@@ -123,7 +124,11 @@ struct ChatView: View {
             // 运行状态
             Button {
                 // 点一下刷新会话列表
-                Task { await state.refreshSessions() }
+                if state.runningCount > 0 {
+                    showRunningList = true
+                } else {
+                    Task { await state.refreshSessions() }
+                }
             } label: {
                 HStack(spacing: 5) {
                     Circle()
@@ -135,6 +140,7 @@ struct ChatView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                .contentShape(Rectangle())
                 .padding(.horizontal, 9)
                 .frame(height: 32)
                 .background(Color(.secondarySystemBackground))
@@ -254,10 +260,8 @@ struct ChatView: View {
                     .animation(.easeOut(duration: 0.18), value: showBackToBottom)
             }
             .onChange(of: state.items.count) { _ in
-                if let last = state.items.last {
-                    withAnimation(.easeOut(duration: 0.15)) {
-                        proxy.scrollTo(last.id, anchor: .bottom)
-                    }
+                if let last = state.items.last, !showBackToBottom {
+                    proxy.scrollTo(last.id, anchor: .bottom)
                 }
             }
             .onChange(of: state.isRunning) { running in
@@ -272,13 +276,7 @@ struct ChatView: View {
                     proxy.scrollTo("bottom-sentinel", anchor: .bottom)
                 }
             }
-            .onChange(of: state.items.count) { _ in
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    if !showBackToBottom {
-                        proxy.scrollTo("bottom-sentinel", anchor: .bottom)
-                    }
-                }
-            }
+
         }
     }
 
@@ -554,6 +552,89 @@ struct ChatView: View {
     private var modelSheetHeight: CGFloat {
         let rows = CGFloat(AppState.models.count)
         return min(56 + rows * 54 + 24, 560)
+    }
+
+    /// 运行中任务列表：点一条切过去看，右侧可停止
+    private var runningSheet: some View {
+        NavigationStack {
+            Group {
+                if state.runningList.isEmpty {
+                    VStack(spacing: 10) {
+                        Image(systemName: "checkmark.circle")
+                            .font(.system(size: 34))
+                            .foregroundStyle(.tertiary)
+                        Text("没有正在运行的任务")
+                            .font(.system(size: 14))
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ScrollView {
+                        VStack(spacing: 0) {
+                            ForEach(state.runningList, id: \.taskId) { rt in
+                                HStack(spacing: 11) {
+                                    ProgressView()
+                                        .scaleEffect(0.7)
+                                        .frame(width: 18)
+
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(rt.title.isEmpty ? "新任务" : rt.title)
+                                            .font(.system(size: 14.5, weight: .medium))
+                                            .lineLimit(1)
+                                        Text(elapsedText(rt.startedAt))
+                                            .font(.system(size: 11.5))
+                                            .foregroundStyle(.tertiary)
+                                    }
+
+                                    Spacer(minLength: 8)
+
+                                    Button {
+                                        Task { await state.stop(taskId: rt.taskId) }
+                                    } label: {
+                                        Image(systemName: "stop.fill")
+                                            .font(.system(size: 12, weight: .bold))
+                                            .foregroundStyle(.white)
+                                            .frame(width: 28, height: 28)
+                                            .background(Color.red, in: Circle())
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                                .padding(.horizontal, 18)
+                                .frame(height: 62)
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    showRunningList = false
+                                    if let s = state.sessions.first(where: { $0.id == rt.sessionId }) {
+                                        Task { await state.open(s) }
+                                    }
+                                }
+
+                                if rt.taskId != state.runningList.last?.taskId {
+                                    Divider().opacity(0.35).padding(.leading, 47)
+                                }
+                            }
+                        }
+                        .padding(.top, 6)
+                    }
+                }
+            }
+            .navigationTitle("运行中")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("完成") { showRunningList = false }
+                }
+            }
+        }
+        .presentationDetents([.height(min(120 + CGFloat(state.runningCount) * 62, 460))])
+        .presentationDragIndicator(.visible)
+    }
+
+    private func elapsedText(_ start: Date) -> String {
+        let s = Int(Date().timeIntervalSince(start))
+        if s < 60 { return "\(s) 秒" }
+        if s < 3600 { return "\(s / 60) 分 \(s % 60) 秒" }
+        return "\(s / 3600) 小时 \((s % 3600) / 60) 分"
     }
 
     private var modelSheet: some View {

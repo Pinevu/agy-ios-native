@@ -388,6 +388,12 @@ struct AuthImage: View {
         }
         .task {
             guard image == nil else { return }
+            // 内存缓存命中：同步取出，不闪 loading
+            if let hit = ImageCache.shared.get(path, taskId: taskId) {
+                image = hit
+                loading = false
+                return
+            }
             loading = true
             let isBareName = !path.contains("/")
             let img: UIImage?
@@ -396,6 +402,7 @@ struct AuthImage: View {
             } else {
                 img = await APIClient.shared.loadImage(path: path)
             }
+            if let img { ImageCache.shared.set(img, for: path, taskId: taskId) }
             await MainActor.run {
                 image = img
                 loading = false

@@ -8,8 +8,9 @@ struct RunningTask {
     let sessionId: String
     var conversationId: String?
     var stream: Task<Void, Never>?
-    var items: [ChatItem] = []
-    var lastActivity: Date = Date()
+    /// 会话标题（用于「运行中」列表展示）
+    var title: String = ""
+    var startedAt: Date = Date()
 }
 
 @MainActor
@@ -29,6 +30,11 @@ final class AppState: ObservableObject {
     @Published var running: [String: RunningTask] = [:]
     /// 每个会话的消息缓存（切走再切回不丢）
     private var sessionItems: [String: [ChatItem]] = [:]
+    /// 后台任务的条目缓冲（不参与 @Published，避免流式时狂刷 UI）
+    private var taskBuffers: [String: [ChatItem]] = [:]
+    /// 流式文本节流缓冲
+    private var pendingText: [String: String] = [:]
+    private var flushScheduled: Set<String> = []
     /// 任务运行中追加的提示词，等当前任务结束后自动发送
     @Published var pendingPrompts: [String: String] = [:]
 
@@ -38,17 +44,22 @@ final class AppState: ObservableObject {
     /// 全局在跑的任务数
     var runningCount: Int { running.count }
 
-    /// 新会话（还没落库）用的临时 key，避免和别的会话串台
-    private var draftSessionKey: String?
+    /// 新会话（还没落库）用的临时 key，初值就有，保证任何时刻都有归属
+    private var draftSessionKey = "draft-\(UUID().uuidString)"
 
-    /// 当前会话自己的 key
-    var activeSessionKey: String? {
+    /// 当前会话自己的 key（永不为 nil）
+    var activeSessionKey: String {
         currentSession?.id ?? draftSessionKey
     }
 
     var currentRunningTask: RunningTask? {
-        guard let sid = activeSessionKey else { return nil }
+        let sid = activeSessionKey
         return running.values.first { $0.sessionId == sid }
+    }
+
+    /// 正在跑的任务列表（供「运行中」面板）
+    var runningList: [RunningTask] {
+        running.values.sorted { $0.startedAt < $1.startedAt }
     }
     @Published var conversationId: String?
 
@@ -299,8 +310,9 @@ final class AppState: ObservableObject {
         assistantIndex = nil
 
         // 后台正在跑这个会话 → 直接用它的实时缓冲
-        if let rt = running.values.first(where: { $0.sessionId == session.id }), !rt.items.isEmpty {
-            items = rt.items
+        if let rt = running.values.first(where: { $0.sessionId == session.id }),
+           let buf = taskBuffers[rt.taskId], !buf.isEmpty {
+            items = buf
             if let rtConv = rt.conversationId { conversationId = rtConv }
             return
         }
@@ -383,7 +395,9 @@ final class AppState: ObservableObject {
             running[r.id] = RunningTask(taskId: r.id,
                                         sessionId: sid,
                                         conversationId: conversationId,
-                                        items: items)
+                                        title: text.isEmpty ? "新任务" : String(text.prefix(18)),
+                                        startedAt: Date())
+            taskBuffers[r.id] = items
             listen(taskId: r.id)
         } catch {
             items.append(ChatItem(kind: .error(text: error.localizedDescription)))
@@ -464,9 +478,15 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// 停止当前会话的任务
     func stop() async {
-        guard let id = runningTaskId else { return }
-        await api.stop(id)
+        guard let rt = currentRunningTask else { return }
+        await stop(taskId: rt.taskId)
+    }
+
+    /// 停止指定的任务（运行中面板用）
+    func stop(taskId: String) async {
+        await api.stop(taskId)
         showToast("已停止")
     }
 
@@ -483,10 +503,12 @@ final class AppState: ObservableObject {
     private func finish(taskId: String) {
         guard let rt = running[taskId] else { return }
         let sid = rt.sessionId
-        sessionItems[sid] = rt.items
-        if currentSession?.id == sid {
-            items = rt.items
+        let buf = taskBuffers[taskId] ?? items
+        sessionItems[sid] = buf
+        if activeSessionKey == sid {
+            items = buf
         }
+        taskBuffers.removeValue(forKey: taskId)
         running.removeValue(forKey: taskId)
 
         // 有排队的追加提示词 → 自动发出
@@ -501,9 +523,47 @@ final class AppState: ObservableObject {
     // MARK: - 事件
 
     /// 非当前会话的事件：只追加到该任务的缓冲
+    /// 把累积的流式文本落到 items（节流 80ms）
+    private func scheduleFlush(taskId: String) {
+        guard !flushScheduled.contains(taskId) else { return }
+        flushScheduled.insert(taskId)
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 80_000_000)
+            guard let self else { return }
+            self.flushScheduled.remove(taskId)
+            self.flushText(taskId: taskId)
+        }
+    }
+
+    private func flushText(taskId: String) {
+        guard let chunk = pendingText[taskId], !chunk.isEmpty else { return }
+        pendingText[taskId] = ""
+        guard running[taskId] != nil else { return }
+
+        let isCurrent = activeSessionKey == running[taskId]?.sessionId
+        if isCurrent {
+            if let idx = assistantIndex, idx < items.count,
+               case .assistant(let old) = items[idx].kind {
+                items[idx].kind = .assistant(text: old + chunk)
+            } else {
+                items.append(ChatItem(kind: .assistant(text: chunk)))
+                assistantIndex = items.count - 1
+            }
+            taskBuffers[taskId] = items
+        } else {
+            var buf = taskBuffers[taskId] ?? []
+            if let last = buf.indices.last, case .assistant(let old) = buf[last].kind {
+                buf[last].kind = .assistant(text: old + chunk)
+            } else {
+                buf.append(ChatItem(kind: .assistant(text: chunk)))
+            }
+            taskBuffers[taskId] = buf
+        }
+    }
+
     private func applyToBuffer(_ ev: ChatEvent, taskId: String) {
-        guard var rt = running[taskId] else { return }
-        var buf = rt.items
+        guard running[taskId] != nil else { return }
+        var buf = taskBuffers[taskId] ?? []
         switch ev.type {
         case "text":
             if let t = ev.text, !t.isEmpty {
@@ -533,7 +593,7 @@ final class AppState: ObservableObject {
         default:
             break
         }
-        rt.items = buf
+        taskBuffers[taskId] = buf
         if let c = ev.conversationId, !c.isEmpty { rt.conversationId = c }
         running[taskId] = rt
         sessionItems[rt.sessionId] = buf
@@ -541,9 +601,8 @@ final class AppState: ObservableObject {
 
     private func handle(_ ev: ChatEvent, taskId: String) {
         guard running[taskId] != nil else { return }
-        running[taskId]?.lastActivity = Date()
 
-        let isCurrent = currentSession?.id == running[taskId]?.sessionId
+        let isCurrent = activeSessionKey == running[taskId]?.sessionId
         // 非当前会话：所有改动只落在该任务的缓冲里，回头切过去再还原
         if !isCurrent {
             applyToBuffer(ev, taskId: taskId)
@@ -555,9 +614,18 @@ final class AppState: ObservableObject {
             running[taskId]?.conversationId = c
         }
 
+        // 非文本事件（工具卡、用量、结束）之前，先把攒下的文本落地，避免顺序错乱
+        if ev.type != "text", !(pendingText[taskId] ?? "").isEmpty {
+            flushText(taskId: taskId)
+        }
+
         switch ev.type {
         case "text":
             guard let t = ev.text, !t.isEmpty else { return }
+            // 节流：先攒着，80ms 后统一落盘，避免每帧重排整张列表
+            pendingText[taskId, default: ""] += t
+            scheduleFlush(taskId: taskId)
+            return
             if let idx = assistantIndex, idx < items.count {
                 if case .assistant(let old) = items[idx].kind {
                     items[idx].kind = .assistant(text: old + t)
@@ -603,7 +671,7 @@ final class AppState: ObservableObject {
             if let e = ev.error, !e.isEmpty {
                 items.append(ChatItem(kind: .error(text: e)))
             }
-            running[taskId]?.items = items
+            taskBuffers[taskId] = items
             finish(taskId: taskId)
 
         default:
@@ -611,7 +679,7 @@ final class AppState: ObservableObject {
         }
 
         // 关键：当前会话的改动也要回写任务缓冲，finish() 才不会拿旧副本覆盖
-        running[taskId]?.items = items
+        taskBuffers[taskId] = items
         if let sid = running[taskId]?.sessionId {
             sessionItems[sid] = items
         }
