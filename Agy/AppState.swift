@@ -766,7 +766,8 @@ final class AppState: ObservableObject {
 
     /// 取路径最后一段：正文里是绝对路径、images 里是裸文件名，必须归一化才能比对
     private func baseName(_ p: String) -> String {
-        p.rsplit("/", 1).last.map(String.init) ?? p
+        if let i = p.lastIndex(of: "/") { return String(p[p.index(after: i)...]) }
+        return p
     }
 
     private func apply(_ events: [ChatEvent], live: Bool) {
