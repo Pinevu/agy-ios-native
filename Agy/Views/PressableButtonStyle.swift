@@ -19,10 +19,11 @@ private final class RowHeightStore {
 
 private struct HeightCacheModifier: ViewModifier {
     let id: String
-    @State private var height: CGFloat = RowHeightStore.shared.heights[id] ?? 0
+    @State private var height: CGFloat = 0
 
     func body(content: Content) -> some View {
         content
+            .onAppear { height = RowHeightStore.shared.heights[id] ?? 0 }
             .background(
                 GeometryReader { g in
                     Color.clear

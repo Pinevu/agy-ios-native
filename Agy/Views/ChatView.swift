@@ -286,20 +286,7 @@ struct ChatView: View {
                         }
                     }
                     ForEach(state.items) { item in
-                        MessageRow(item: item, actions: MessageActions(
-                            edit: { openEditor(for: $0) },
-                            retry: { it in
-                                Task {
-                                    inputFocused = false
-                                    await state.retry(itemId: it.id)
-                                }
-                            },
-                            deleteFrom: { it in
-                                Task { await state.deleteFrom(itemId: it.id) }
-                            }
-                        ))
-                        .id(item.id)
-                        .heightCached(item.id)
+                        messageRow(item)
                     }
                     Color.clear
                         .frame(height: 1)
@@ -376,6 +363,25 @@ struct ChatView: View {
         }
     }
 
+
+
+    /// 单行独立成函数，避免 messageList 的表达式大到编译器算不出来
+    private func messageRow(_ item: ChatItem) -> some View {
+        MessageRow(item: item, actions: MessageActions(
+            edit: { openEditor(for: $0) },
+            retry: { it in
+                Task {
+                    inputFocused = false
+                    await state.retry(itemId: it.id)
+                }
+            },
+            deleteFrom: { it in
+                Task { await state.deleteFrom(itemId: it.id) }
+            }
+        ))
+        .id(item.id)
+        .heightCached(item.id)
+    }
 
     // MARK: - 悬浮滚动按钮
 
