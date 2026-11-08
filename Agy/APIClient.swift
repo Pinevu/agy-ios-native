@@ -15,7 +15,9 @@ enum APIError: LocalizedError {
     }
 }
 
-final class APIClient {
+struct ErrorBody: Decodable { let error: String? }
+
+class APIClient {
     static let shared = APIClient()
 
     /// 当前实例地址，可切换
@@ -81,8 +83,7 @@ final class APIClient {
         if http.statusCode == 401 { throw APIError.unauthorized }
         if http.statusCode >= 400 {
             // 服务端错误体是 {"error": "..."}，取出可读文案，不要把 JSON 原样抛给界面
-            struct ErrBody: Decodable { let error: String? }
-            let friendly = (try? decoder.decode(ErrBody.self, from: data))?.error
+            let friendly = (try? decoder.decode(ErrorBody.self, from: data))?.error
             let msg = friendly ?? String(data: data, encoding: .utf8) ?? ""
             throw APIError.server(msg.isEmpty ? "HTTP \(http.statusCode)" : msg)
         }
