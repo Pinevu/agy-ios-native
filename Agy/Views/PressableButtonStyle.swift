@@ -14,11 +14,11 @@ struct PressableButtonStyle: ButtonStyle {
 /// 避免 LazyVStack 反复重排导致的跳动和掉帧
 private final class RowHeightStore {
     static let shared = RowHeightStore()
-    var heights: [String: CGFloat] = [:]
+    var heights: [UUID: CGFloat] = [:]
 }
 
 private struct HeightCacheModifier: ViewModifier {
-    let id: String
+    let id: UUID
     @State private var height: CGFloat = 0
 
     func body(content: Content) -> some View {
@@ -43,7 +43,7 @@ private struct HeightCacheModifier: ViewModifier {
 
 extension View {
     /// 缓存行高，长会话滚动时减少重排
-    func heightCached(_ id: String) -> some View {
+    func heightCached(_ id: UUID) -> some View {
         modifier(HeightCacheModifier(id: id))
     }
 }
