@@ -2,6 +2,17 @@ import SwiftUI
 import UIKit
 import PhotosUI
 
+/// iOS 17+ 的默认滚动锚点，冷启动直接贴底，避免懒加载白屏
+struct BottomAnchorModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 17.0, *) {
+            content.defaultScrollAnchor(.bottom)
+        } else {
+            content
+        }
+    }
+}
+
 struct ContentHeightKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
@@ -322,12 +333,17 @@ struct ChatView: View {
                 .padding(.top, 14)
                 .padding(.bottom, 20)
             }
+            .modifier(BottomAnchorModifier())
             .coordinateSpace(name: "chatScroll")
             .onPreferenceChange(ContentHeightKey.self) { h in
                 guard abs(h - contentHeight) > 1 else { return }
                 contentHeight = h
-                // 内容变高了（图片、公式陆续布局完）→ 若本来贴底，跟着回到最新位置
-                if stickBottom { scrollToBottomAfterLoad(proxy) }
+                // 内容变高（图片/公式陆续布局完）→ 贴底跟随，但节流，避免滚动死循环
+                guard stickBottom else { return }
+                let now = Date()
+                guard now.timeIntervalSince(lastAutoScroll) > 0.12 else { return }
+                lastAutoScroll = now
+                withAnimation(nil) { proxy.scrollTo("bottom-sentinel", anchor: .bottom) }
             }
             .id(state.currentSession?.id ?? "draft")
             .scrollDismissesKeyboard(.interactively)
@@ -345,18 +361,21 @@ struct ChatView: View {
             }
             .onChange(of: state.currentSession?.id) { _ in
                 turnCursor = -1
-                scrollToBottomAfterLoad(proxy)
+                forceScrollToBottom(proxy)
             }
             .onChange(of: state.loadingSession) { loading in
-                if loading == nil { scrollToBottomAfterLoad(proxy) }
+                if loading == nil { forceScrollToBottom(proxy) }
             }
             .onChange(of: state.items.count) { _ in
-                // 首次加载完整批到达（没有本地缓存）时补一次贴底
-                if !showBackToBottom, let last = state.items.last {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                        proxy.scrollTo(last.id, anchor: .bottom)
-                    }
+                // 贴底状态下有新内容 → 跟到底；否则保持用户当前位置
+                guard stickBottom else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    withAnimation(nil) { proxy.scrollTo("bottom-sentinel", anchor: .bottom) }
                 }
+            }
+            .onAppear {
+                // 冷启动直接进长会话：等布局稳定后贴底
+                forceScrollToBottom(proxy)
             }
 
         }
@@ -365,16 +384,15 @@ struct ChatView: View {
 
     // MARK: - 悬浮滚动按钮
 
-    /// 内容就绪后贴底：分三段延迟重试，躲开图片/公式的布局耗时
-    private func scrollToBottomAfterLoad(_ proxy: ScrollViewProxy) {
-        guard !showBackToBottom else { return }
+    /// 强制贴底：重置滚动状态并多次重试，兜住图片/公式的布局耗时。
+    /// 不能受 showBackToBottom 影响 —— 否则「滚偏了 → 按钮出现 → 不敢滚」会死锁成白屏。
+    private func forceScrollToBottom(_ proxy: ScrollViewProxy) {
+        showBackToBottom = false
         stickBottom = true
-        for delay in [0.05, 0.25, 0.6] {
+        for delay in [0.02, 0.12, 0.3, 0.7] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                if !showBackToBottom {
-                    withAnimation(nil) {
-                        proxy.scrollTo("bottom-sentinel", anchor: .bottom)
-                    }
+                withAnimation(nil) {
+                    proxy.scrollTo("bottom-sentinel", anchor: .bottom)
                 }
             }
         }
