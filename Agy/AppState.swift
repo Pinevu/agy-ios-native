@@ -650,11 +650,11 @@ final class AppState: ObservableObject {
                 for it in buf {
                     if case .assistant(let t) = it.kind {
                         for m in t.matches(of: /!\[[^\]]*\]\(([^)]+)\)/) {
-                            shown.insert(String(m.output.1))
+                            shown.insert(baseName(String(m.output.1)))
                         }
                     }
                 }
-                let fresh = imgs.filter { !shown.contains($0) }
+                let fresh = imgs.filter { !shown.contains(baseName($0)) }
                 if !fresh.isEmpty {
                     buf.append(ChatItem(kind: .images(fresh), taskId: ev.taskId))
                 }
@@ -738,11 +738,11 @@ final class AppState: ObservableObject {
                 for it in items {
                     if case .assistant(let t) = it.kind {
                         for m in t.matches(of: /!\[[^\]]*\]\(([^)]+)\)/) {
-                            shown.insert(String(m.output.1))
+                            shown.insert(baseName(String(m.output.1)))
                         }
                     }
                 }
-                let fresh = imgs.filter { !shown.contains($0) }
+                let fresh = imgs.filter { !shown.contains(baseName($0)) }
                 if !fresh.isEmpty {
                     items.append(ChatItem(kind: .images(fresh), taskId: ev.taskId))
                 }
@@ -762,6 +762,11 @@ final class AppState: ObservableObject {
         if let sid = running[taskId]?.sessionId {
             sessionItems[sid] = items
         }
+    }
+
+    /// 取路径最后一段：正文里是绝对路径、images 里是裸文件名，必须归一化才能比对
+    private func baseName(_ p: String) -> String {
+        p.rsplit("/", 1).last.map(String.init) ?? p
     }
 
     private func apply(_ events: [ChatEvent], live: Bool) {
