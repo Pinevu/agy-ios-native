@@ -2,12 +2,23 @@ import SwiftUI
 import UIKit
 import PhotosUI
 
+struct ContentHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 struct ChatView: View {
     @EnvironmentObject var state: AppState
 
     @State private var showDrawer = false
     @State private var showRunningList = false
     @State private var showBackToBottom = false
+    /// 是否钉底：用户在底部时，内容变高（图片/公式加载）自动跟随
+    @State private var stickBottom = true
+    /// 内容总高度（用于侦测高度变化）
+    @State private var contentHeight: CGFloat = 0
     @State private var turnCursor: Int = -1
     @State private var showModelPicker = false
     @State private var showQuota = false
@@ -29,6 +40,20 @@ struct ChatView: View {
                 composer
             }
             .background(Color(.systemBackground).ignoresSafeArea())
+            // 从左边缘右滑 → 打开任务列表（跟 Gemini 一致）
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 20)
+                    .onEnded { v in
+                        guard !showDrawer else { return }
+                        let dx = v.translation.width
+                        let dy = v.translation.height
+                        guard v.startLocation.x < 44,
+                              dx > 60,
+                              abs(dx) > abs(dy) * 1.5 else { return }
+                        dismissKeyboard()
+                        withAnimation(.easeOut(duration: 0.26)) { showDrawer = true }
+                    }
+            )
 
             // 全屏任务列表：从左侧平滑滑入
             if showDrawer {
@@ -36,6 +61,17 @@ struct ChatView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(Color(.systemBackground).ignoresSafeArea())
                     .transition(.move(edge: .leading))
+                    .simultaneousGesture(
+                        // 向左滑 → 关闭任务列表，回到对话
+                        DragGesture(minimumDistance: 20)
+                            .onEnded { v in
+                                let dx = v.translation.width
+                                let dy = v.translation.height
+                                guard dx < -60, abs(dx) > abs(dy) * 1.5 else { return }
+                                dismissKeyboard()
+                                withAnimation(.easeIn(duration: 0.2)) { showDrawer = false }
+                            }
+                    )
                     .zIndex(3)
             }
 
@@ -215,6 +251,14 @@ struct ChatView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
+                    Color.clear
+                        .frame(height: 0)
+                        .background(
+                            GeometryReader { g in
+                                Color.clear
+                                    .preference(key: ContentHeightKey.self, value: g.frame(in: .named("chatScroll")).maxY)
+                            }
+                        )
                     if state.items.isEmpty {
                         if state.loadingSession != nil {
                             loadingState
@@ -240,8 +284,14 @@ struct ChatView: View {
                     Color.clear
                         .frame(height: 1)
                         .id("bottom-sentinel")
-                        .onAppear { if showBackToBottom { withAnimation { showBackToBottom = false } } }
-                        .onDisappear { if !showBackToBottom { showBackToBottom = true } }
+                        .onAppear {
+                            if showBackToBottom { withAnimation { showBackToBottom = false } }
+                            stickBottom = true
+                        }
+                        .onDisappear {
+                            if !showBackToBottom { showBackToBottom = true }
+                            stickBottom = false
+                        }
                     if state.isRunning {
                         HStack(spacing: 7) {
                             ProgressView().scaleEffect(0.7)
@@ -256,6 +306,13 @@ struct ChatView: View {
                 .padding(.horizontal, 15)
                 .padding(.top, 14)
                 .padding(.bottom, 20)
+            }
+            .coordinateSpace(name: "chatScroll")
+            .onPreferenceChange(ContentHeightKey.self) { h in
+                guard abs(h - contentHeight) > 1 else { return }
+                contentHeight = h
+                // 内容变高了（图片、公式陆续布局完）→ 若本来贴底，跟着回到最新位置
+                if stickBottom { scrollToBottomAfterLoad(proxy) }
             }
             .id(state.currentSession?.id ?? "draft")
             .scrollDismissesKeyboard(.interactively)
@@ -296,6 +353,7 @@ struct ChatView: View {
     /// 内容就绪后贴底：分三段延迟重试，躲开图片/公式的布局耗时
     private func scrollToBottomAfterLoad(_ proxy: ScrollViewProxy) {
         guard !showBackToBottom else { return }
+        stickBottom = true
         for delay in [0.05, 0.25, 0.6] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                 if !showBackToBottom {

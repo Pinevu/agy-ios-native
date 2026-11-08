@@ -467,6 +467,7 @@ final class AppState: ObservableObject {
             }
             // 登记为并发任务
             let sid = activeSessionKey ?? r.id
+            LiveActivityManager.shared.start(title: displayTitleForCurrent())
             running[r.id] = RunningTask(taskId: r.id,
                                         sessionId: sid,
                                         conversationId: conversationId,
@@ -578,6 +579,10 @@ final class AppState: ObservableObject {
     private func finish(taskId: String) {
         guard let rt = running[taskId] else { return }
         let sid = rt.sessionId
+        // 灵动岛：仅当没有其它任务在跑时收尾
+        if running.count <= 1 {
+            LiveActivityManager.shared.end()
+        }
 
         // 收尾前把攒着的文本先落地，避免最后一段丢失
         if !(pendingText[taskId] ?? "").isEmpty {
@@ -629,6 +634,13 @@ final class AppState: ObservableObject {
                 assistantIndex = nil
             }
         }
+    }
+
+    /// 当前会话标题（灵动岛用）
+    func displayTitleForCurrent() -> String {
+        if let s = currentSession { return title(of: s) }
+        let t = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.isEmpty ? "Antigravity" : String(t.prefix(24))
     }
 
     // MARK: - 事件
@@ -770,6 +782,7 @@ final class AppState: ObservableObject {
 
         case "tool":
             assistantIndex = nil
+            if let n = ev.name { LiveActivityManager.shared.update(step: n) }
             items.append(ChatItem(kind: .tool(name: ev.name ?? "tool",
                                               input: ev.params ?? ev.text ?? "",
                                               output: nil,

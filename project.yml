@@ -2,7 +2,7 @@ name: Agy
 options:
   bundleIdPrefix: cc.nooh
   deploymentTarget:
-    iOS: "16.0"
+    iOS: "16.1"
   createIntermediateGroups: true
   groupSortPosition: top
 
@@ -12,6 +12,29 @@ packages:
     from: 1.7.3
 
 targets:
+  AgyWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: AgyWidget
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: cc.nooh.agy.native.widget
+        PRODUCT_NAME: AgyWidget
+        SWIFT_VERSION: "5.9"
+        CODE_SIGN_IDENTITY: ""
+        CODE_SIGNING_REQUIRED: "NO"
+        CODE_SIGNING_ALLOWED: "NO"
+        SKIP_INSTALL: "YES"
+        INFOPLIST_KEY_CFBundleDisplayName: Agy
+    info:
+      path: AgyWidget/Info.plist
+      properties:
+        CFBundleDisplayName: Agy
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+
   Agy:
     type: application
     platform: iOS
@@ -21,9 +44,14 @@ targets:
           - "Resources"
       - path: Agy/Resources
         buildPhase: resources
+      - path: Shared
     dependencies:
       - package: SwiftMath
         product: SwiftMath
+      - target: AgyWidget
+        embed: true
+      - sdk: WidgetKit.framework
+      - sdk: ActivityKit.framework
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: cc.nooh.agy.native
@@ -31,8 +59,8 @@ targets:
         INFOPLIST_FILE: Agy/Info.plist
         SWIFT_VERSION: "5.9"
         TARGETED_DEVICE_FAMILY: "1"
-        MARKETING_VERSION: "4.0.0"
-        CURRENT_PROJECT_VERSION: "22"
+        MARKETING_VERSION: "4.1.0"
+        CURRENT_PROJECT_VERSION: "23"
         CODE_SIGN_IDENTITY: ""
         CODE_SIGNING_REQUIRED: "NO"
         CODE_SIGNING_ALLOWED: "NO"
