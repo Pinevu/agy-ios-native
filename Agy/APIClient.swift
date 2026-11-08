@@ -80,7 +80,10 @@ final class APIClient {
         guard let http = resp as? HTTPURLResponse else { throw APIError.server("无响应") }
         if http.statusCode == 401 { throw APIError.unauthorized }
         if http.statusCode >= 400 {
-            let msg = String(data: data, encoding: .utf8) ?? ""
+            // 服务端错误体是 {"error": "..."}，取出可读文案，不要把 JSON 原样抛给界面
+            struct ErrBody: Decodable { let error: String? }
+            let friendly = (try? decoder.decode(ErrBody.self, from: data))?.error
+            let msg = friendly ?? String(data: data, encoding: .utf8) ?? ""
             throw APIError.server(msg.isEmpty ? "HTTP \(http.statusCode)" : msg)
         }
         do {

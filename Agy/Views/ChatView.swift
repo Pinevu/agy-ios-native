@@ -216,7 +216,11 @@ struct ChatView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
                     if state.items.isEmpty {
-                        emptyState
+                        if state.loadingSession != nil {
+                            loadingState
+                        } else {
+                            emptyState
+                        }
                     }
                     ForEach(state.items) { item in
                         MessageRow(item: item, actions: MessageActions(
@@ -253,17 +257,13 @@ struct ChatView: View {
                 .padding(.top, 14)
                 .padding(.bottom, 20)
             }
+            .id(state.currentSession?.id ?? "draft")
             .scrollDismissesKeyboard(.interactively)
             .overlay(alignment: .bottomTrailing) {
                 floatingButtons(proxy)
                     .padding(.trailing, 12)
                     .padding(.bottom, 10)
                     .animation(.easeOut(duration: 0.18), value: showBackToBottom)
-            }
-            .onChange(of: state.items.count) { _ in
-                if let last = state.items.last, !showBackToBottom {
-                    proxy.scrollTo(last.id, anchor: .bottom)
-                }
             }
             .onChange(of: state.isRunning) { running in
                 if running {
@@ -273,8 +273,13 @@ struct ChatView: View {
             }
             .onChange(of: state.currentSession?.id) { _ in
                 turnCursor = -1
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                    proxy.scrollTo("bottom-sentinel", anchor: .bottom)
+            }
+            .onChange(of: state.items.count) { _ in
+                // 首次加载完整批到达（没有本地缓存）时补一次贴底
+                if !showBackToBottom, let last = state.items.last {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                        proxy.scrollTo(last.id, anchor: .bottom)
+                    }
                 }
             }
 
@@ -344,6 +349,20 @@ struct ChatView: View {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
                                         to: nil, from: nil, for: nil)
         inputFocused = false
+    }
+
+    /// 拉取历史时的骨架，避免白屏
+    private var loadingState: some View {
+        VStack(spacing: 12) {
+            Spacer(minLength: 120)
+            ProgressView()
+                .scaleEffect(1.0)
+            Text("正在载入会话…")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 120)
+        }
+        .frame(maxWidth: .infinity)
     }
 
     private var emptyState: some View {

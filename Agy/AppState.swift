@@ -129,6 +129,8 @@ final class AppState: ObservableObject {
 
     // UI
     @Published var toast: String?
+    /// 正在拉取回放的会话 id（用于显示加载骨架，避免白屏）
+    @Published var loadingSession: String?
 
     /// 外观：system / light / dark
     @Published var appearanceMode: String =
@@ -378,8 +380,10 @@ final class AppState: ObservableObject {
             items = cached
             return
         }
-        // 都没 → 从服务端回放
-        items = []
+        // 都没 → 从服务端回放（保持旧内容 + 加载态，避免白屏）
+        loadingSession = session.id
+        items = []                 // 清旧内容，界面显示骨架而不是白屏
+        defer { loadingSession = nil }
         do {
             let events = try await api.replay(session.id)
             apply(events, live: false)
@@ -738,6 +742,20 @@ final class AppState: ObservableObject {
     }
 
     private func apply(_ events: [ChatEvent], live: Bool) {
+        // 关键：先构建局部数组，最后一次性赋值。
+        // 原来每条事件都改 self.items，4000 条事件 = 4000 次 @Published → 界面卡死。
+        var out: [ChatItem] = []
+        var assistant: Int? = nil
+
+        func appendAssistant(_ t: String) {
+            if let i = assistant, i < out.count, case .assistant(let old) = out[i].kind {
+                out[i].kind = .assistant(text: old + t)
+            } else {
+                out.append(ChatItem(kind: .assistant(text: t)))
+                assistant = out.count - 1
+            }
+        }
+
         for ev in events {
             switch ev.type {
             case "user_input":
@@ -755,44 +773,43 @@ final class AppState: ObservableObject {
                     }
                 }
                 let shown = body.isEmpty ? "已发送图片" : body.joined(separator: "\n")
-                items.append(ChatItem(kind: .user(text: shown, attachments: [], remotePaths: paths),
-                                      taskId: ev.taskId,
-                                      rawText: shown))
-                assistantIndex = nil
+                out.append(ChatItem(kind: .user(text: shown, attachments: [], remotePaths: paths),
+                                    taskId: ev.taskId,
+                                    rawText: shown))
+                assistant = nil
+
             case "text":
                 guard let t = ev.text, !t.isEmpty else { continue }
-                if let idx = assistantIndex, idx < items.count,
-                   case .assistant(let old) = items[idx].kind {
-                    items[idx].kind = .assistant(text: old + t)
-                } else {
-                    items.append(ChatItem(kind: .assistant(text: t)))
-                    assistantIndex = items.count - 1
-                }
+                appendAssistant(t)
+
             case "tool":
-                assistantIndex = nil
-                items.append(ChatItem(kind: .tool(name: ev.name ?? "tool",
-                                                  input: ev.params ?? ev.text ?? "",
-                                                  output: nil, seconds: nil, running: true)))
+                assistant = nil
+                out.append(ChatItem(kind: .tool(name: ev.name ?? "tool",
+                                                input: ev.params ?? ev.text ?? "",
+                                                output: nil, seconds: nil, running: true)))
             case "tool_done":
-                for i in stride(from: items.count - 1, through: 0, by: -1) {
-                    if case .tool(let n, let inp, _, _, true) = items[i].kind {
-                        items[i].kind = .tool(name: n, input: inp, output: ev.output, seconds: ev.secs, running: false)
+                for i in stride(from: out.count - 1, through: 0, by: -1) {
+                    if case .tool(let n, let inp, _, _, true) = out[i].kind {
+                        out[i].kind = .tool(name: n, input: inp, output: ev.output, seconds: ev.secs, running: false)
                         break
                     }
                 }
             case "usage":
-                if let u = ev.usage { items.append(ChatItem(kind: .usage(text: u.summary))) }
+                if let u = ev.usage { out.append(ChatItem(kind: .usage(text: u.summary))) }
             case "error":
-                items.append(ChatItem(kind: .error(text: ev.error ?? ev.text ?? "错误")))
+                out.append(ChatItem(kind: .error(text: ev.error ?? ev.text ?? "错误")))
             case "end":
-                assistantIndex = nil
+                assistant = nil
                 if let imgs = ev.images, !imgs.isEmpty {
-                    items.append(ChatItem(kind: .images(imgs), taskId: ev.taskId))
+                    out.append(ChatItem(kind: .images(imgs), taskId: ev.taskId))
                 }
             default:
                 break
             }
         }
+
+        items = out
+        assistantIndex = nil
     }
 
     // MARK: - 工具
