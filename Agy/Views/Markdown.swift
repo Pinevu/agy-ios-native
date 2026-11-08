@@ -30,7 +30,10 @@ enum MDBlock: Identifiable {
 func looksLikeMath(_ tex: String) -> Bool {
     let t = tex.trimmingCharacters(in: .whitespacesAndNewlines)
     if t.isEmpty || t.count > 240 { return false }
-    // 中文/日文出现在公式里几乎都是误判
+    // 有反斜杠命令 = 一定是公式（哪怕里面夹了中文，如 \text{ 或 }）
+    if t.range(of: "\\\\[a-zA-Z]{2,}", options: .regularExpression) != nil { return true }
+
+    // 没有命令时才把中文当误判
     for sc in t.unicodeScalars {
         let v = sc.value
         if (0x4E00...0x9FFF).contains(v) || (0x3040...0x30FF).contains(v) { return false }

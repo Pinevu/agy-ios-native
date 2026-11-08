@@ -3,6 +3,15 @@ import Foundation
 import SwiftUI
 import Combine
 
+struct RunningTask {
+    let taskId: String
+    let sessionId: String
+    var conversationId: String?
+    var stream: Task<Void, Never>?
+    var items: [ChatItem] = []
+    var lastActivity: Date = Date()
+}
+
 @MainActor
 final class AppState: ObservableObject {
     // 鉴权
@@ -16,8 +25,26 @@ final class AppState: ObservableObject {
     @Published var items: [ChatItem] = []
 
     // 运行状态
-    @Published var isRunning = false
-    @Published var runningTaskId: String?
+    /// 多任务并发：key = taskId
+    @Published var running: [String: RunningTask] = [:]
+    /// 每个会话的消息缓存（切走再切回不丢）
+    private var sessionItems: [String: [ChatItem]] = [:]
+    /// 任务运行中追加的提示词，等当前任务结束后自动发送
+    @Published var pendingPrompts: [String: String] = [:]
+
+    /// 当前会话是否在跑
+    var isRunning: Bool { currentRunningTask != nil }
+    var runningTaskId: String? { currentRunningTask?.taskId }
+    /// 全局在跑的任务数
+    var runningCount: Int { running.count }
+
+    var currentRunningTask: RunningTask? {
+        guard let sid = currentSession?.id else {
+            // 新会话：只要有一个在跑就算（发送键显示停止）
+            return running.values.first
+        }
+        return running.values.first { $0.sessionId == sid }
+    }
     @Published var conversationId: String?
 
     // 输入
@@ -86,7 +113,6 @@ final class AppState: ObservableObject {
         customTitles[s.id] ?? s.displayTitle
     }
 
-    private var streamTask: Task<Void, Never>?
     private var assistantIndex: Int?
 
     let api = APIClient.shared
@@ -126,7 +152,8 @@ final class AppState: ObservableObject {
 
     /// 切换实例：换地址、清空当前会话状态、重新鉴权
     func switchInstance(_ inst: Instance) async {
-        guard !isRunning else { showToast("请先等当前任务结束或停止"); return }
+        // 切实例前把当前会话落盘，后台任务保持运行
+        if let cur = currentSession?.id { sessionItems[cur] = items }
         currentInstanceId = inst.id
         api.setBase(inst.url)
         // 清空现场
@@ -257,24 +284,38 @@ final class AppState: ObservableObject {
     }
 
     func open(_ session: Session) async {
-        guard !isRunning else {
-            showToast("请先等当前任务结束或停止")
-            return
+        // 保存当前会话的现场
+        if let cur = currentSession?.id, cur != session.id {
+            sessionItems[cur] = items
         }
         currentSession = session
         conversationId = session.conversationId
-        items = []
         assistantIndex = nil
+
+        // 后台正在跑这个会话 → 直接用它的实时缓冲
+        if let rt = running.values.first(where: { $0.sessionId == session.id }), !rt.items.isEmpty {
+            items = rt.items
+            if let rtConv = rt.conversationId { conversationId = rtConv }
+            return
+        }
+        // 之前看过 → 用缓存
+        if let cached = sessionItems[session.id], !cached.isEmpty {
+            items = cached
+            return
+        }
+        // 都没 → 从服务端回放
+        items = []
         do {
             let events = try await api.replay(session.id)
             apply(events, live: false)
+            sessionItems[session.id] = items
         } catch {
             showToast(error.localizedDescription)
         }
     }
 
     func newSession() {
-        guard !isRunning else { showToast("请先等当前任务结束或停止"); return }
+        if let cur = currentSession?.id { sessionItems[cur] = items }
         currentSession = nil
         conversationId = nil
         items = []
@@ -286,7 +327,17 @@ final class AppState: ObservableObject {
     func send() async {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         if text.isEmpty && attachments.isEmpty { return }
-        if isRunning { await stop(); return }
+
+        // 当前会话已有任务在跑 → 作为「追加提示词」排队
+        if let cur = currentRunningTask {
+            let sid = cur.sessionId
+            let existing = pendingPrompts[sid] ?? ""
+            let merged = existing.isEmpty ? text : existing + "\n" + text
+            pendingPrompts[sid] = merged
+            draft = ""
+            showToast("已排队，当前任务结束后自动发送")
+            return
+        }
 
         var prompt = text
         var paths: [String] = []
@@ -316,13 +367,16 @@ final class AppState: ObservableObject {
                                       model: model,
                                       conversationId: conversationId,
                                       sessionId: currentSession?.id)
-            runningTaskId = r.id
             if let c = r.conversationId { conversationId = c }
-            // 回填任务 id，编辑重发时才知道从哪截断
             if let idx = items.firstIndex(where: { $0.id == bubbleId }) {
                 items[idx].taskId = r.id
             }
-            isRunning = true
+            // 登记为并发任务
+            let sid = currentSession?.id ?? r.id
+            running[r.id] = RunningTask(taskId: r.id,
+                                        sessionId: sid,
+                                        conversationId: conversationId,
+                                        items: items)
             listen(taskId: r.id)
         } catch {
             items.append(ChatItem(kind: .error(text: error.localizedDescription)))
@@ -344,7 +398,7 @@ final class AppState: ObservableObject {
 
     /// 编辑用户消息并覆盖重发
     func editAndResend(itemId: UUID, newText: String, keepPaths: [String] = []) async {
-        guard !isRunning else { showToast("请先等当前任务结束或停止"); return }
+        guard currentRunningTask == nil else { showToast("当前会话有任务在跑，先等它结束"); return }
         guard let idx = items.firstIndex(where: { $0.id == itemId }) else { return }
         let trimmed = newText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -367,7 +421,7 @@ final class AppState: ObservableObject {
 
     /// 重试：删掉这一轮及其之后的回复，用同样的提问重新生成
     func retry(itemId: UUID) async {
-        guard !isRunning else { showToast("请先等当前任务结束或停止"); return }
+        guard currentRunningTask == nil else { showToast("当前会话有任务在跑，先等它结束"); return }
         guard let idx = items.firstIndex(where: { $0.id == itemId }) else { return }
         guard let turn = turnIndex(for: idx) else { return }
         guard case .user(let text, let atts, _) = items[turn].kind else { return }
@@ -383,7 +437,7 @@ final class AppState: ObservableObject {
 
     /// 从此处删除：服务端截断 + 本地移除该轮及其之后
     func deleteFrom(itemId: UUID) async {
-        guard !isRunning else { showToast("请先等当前任务结束或停止"); return }
+        guard currentRunningTask == nil else { showToast("当前会话有任务在跑，先等它结束"); return }
         guard let idx = items.firstIndex(where: { $0.id == itemId }) else { return }
         let turn = turnIndex(for: idx) ?? idx
         await truncateServer(from: turn)
@@ -410,23 +464,88 @@ final class AppState: ObservableObject {
     }
 
     private func listen(taskId: String) {
-        streamTask?.cancel()
-        streamTask = api.stream(taskId: taskId, onEvent: { [weak self] ev in
+        let task = api.stream(taskId: taskId, onEvent: { [weak self] ev in
             Task { @MainActor in self?.handle(ev, taskId: taskId) }
         }, onClose: { [weak self] in
-            Task { @MainActor in
-                guard let self else { return }
-                self.isRunning = false
-                self.runningTaskId = nil
-            }
+            Task { @MainActor in self?.finish(taskId: taskId) }
         })
+        running[taskId]?.stream = task
+    }
+
+    /// 任务收尾：落盘缓冲、清理运行态、检查排队提示词
+    private func finish(taskId: String) {
+        guard let rt = running[taskId] else { return }
+        let sid = rt.sessionId
+        sessionItems[sid] = rt.items
+        if currentSession?.id == sid {
+            items = rt.items
+        }
+        running.removeValue(forKey: taskId)
+
+        // 有排队的追加提示词 → 自动发出
+        if let queued = pendingPrompts[sid], !queued.isEmpty {
+            pendingPrompts.removeValue(forKey: sid)
+            draft = queued
+            Task { await self.send() }
+        }
+        Task { await refreshSessions() }
     }
 
     // MARK: - 事件
 
+    /// 非当前会话的事件：只追加到该任务的缓冲
+    private func applyToBuffer(_ ev: ChatEvent, taskId: String) {
+        guard var rt = running[taskId] else { return }
+        var buf = rt.items
+        switch ev.type {
+        case "text":
+            if let t = ev.text, !t.isEmpty {
+                if let last = buf.indices.last, case .assistant(let old) = buf[last].kind {
+                    buf[last].kind = .assistant(text: old + t)
+                } else {
+                    buf.append(ChatItem(kind: .assistant(text: t)))
+                }
+            }
+        case "tool":
+            if let n = ev.name { buf.append(ChatItem(kind: .tool(name: n, input: ev.text ?? "", output: nil, seconds: nil, running: true))) }
+        case "tool_done":
+            if let i = buf.indices.last, case .tool(let n, let inp, _, _, _) = buf[i].kind {
+                buf[i].kind = .tool(name: n, input: inp, output: ev.output, seconds: ev.seconds, running: false)
+            }
+        case "usage":
+            if let u = ev.usage { buf.append(ChatItem(kind: .usage(text: u.summary))) }
+        case "error":
+            buf.append(ChatItem(kind: .error(text: ev.text ?? "未知错误")))
+        case "end":
+            if let imgs = ev.images, !imgs.isEmpty {
+                buf.append(ChatItem(kind: .images(imgs), taskId: ev.taskId))
+            }
+            if let e = ev.error, !e.isEmpty {
+                buf.append(ChatItem(kind: .error(text: e)))
+            }
+        default:
+            break
+        }
+        rt.items = buf
+        if let c = ev.conversationId, !c.isEmpty { rt.conversationId = c }
+        running[taskId] = rt
+        sessionItems[rt.sessionId] = buf
+    }
+
     private func handle(_ ev: ChatEvent, taskId: String) {
+        guard running[taskId] != nil else { return }
+        running[taskId]?.lastActivity = Date()
+
+        let isCurrent = currentSession?.id == running[taskId]?.sessionId
+        // 非当前会话：所有改动只落在该任务的缓冲里，回头切过去再还原
+        if !isCurrent {
+            applyToBuffer(ev, taskId: taskId)
+            return
+        }
+
         if let c = ev.conversationId, !c.isEmpty {
             conversationId = c
+            running[taskId]?.conversationId = c
         }
 
         switch ev.type {
@@ -477,9 +596,8 @@ final class AppState: ObservableObject {
             if let e = ev.error, !e.isEmpty {
                 items.append(ChatItem(kind: .error(text: e)))
             }
-            isRunning = false
-            runningTaskId = nil
-            Task { await refreshSessions() }
+            running[taskId]?.items = items
+            finish(taskId: taskId)
 
         default:
             break

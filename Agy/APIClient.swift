@@ -184,7 +184,7 @@ final class APIClient {
 
     /// 任务产物文件：/api/files?id=<taskId>&name=<filename>
     func taskFileURL(taskId: String, name: String) -> URL? {
-        var comp = URLComponents(url: baseURL.appendingPathComponent("api/files"),
+        var comp = URLComponents(url: baseURL.appendingPathComponent("api/file"),
                                  resolvingAgainstBaseURL: false)
         comp?.queryItems = [URLQueryItem(name: "id", value: taskId),
                             URLQueryItem(name: "name", value: name)]

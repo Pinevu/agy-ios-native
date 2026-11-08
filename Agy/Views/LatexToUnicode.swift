@@ -17,7 +17,9 @@ enum LatexToUnicode {
         ("\\subseteq", "⊆"), ("\\subset", "⊂"),
         ("\\supseteq", "⊇"), ("\\supset", "⊃"),
         ("\\in ", "∈ "), ("\\notin", "∉"),
-        ("\\setminus", "\\"), ("\\complement", "∁"),
+        ("\\setminus", "∖"), ("\\complement", "∁"),
+        ("\\mid", "|"), ("\\nmid", "∤"),
+        ("\\lfloor", "⌊"), ("\\rfloor", "⌋"), ("\\lceil", "⌈"), ("\\rceil", "⌉"),
         // 逻辑
         ("\\forall", "∀"), ("\\exists", "∃"), ("\\neg", "¬"),
         ("\\land", "∧"), ("\\lor", "∨"), ("\\Rightarrow", "⇒"),

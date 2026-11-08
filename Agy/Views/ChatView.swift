@@ -127,10 +127,11 @@ struct ChatView: View {
             } label: {
                 HStack(spacing: 5) {
                     Circle()
-                        .fill(state.isRunning ? Color.orange : Color.green)
+                        .fill(state.runningCount > 0 ? Color.orange : Color.green)
                         .frame(width: 7, height: 7)
-                    if state.isRunning {
-                        Text("运行中").font(.system(size: 11, weight: .medium))
+                    if state.runningCount > 0 {
+                        Text(state.runningCount > 1 ? "运行中 \(state.runningCount)" : "运行中")
+                            .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -393,6 +394,33 @@ struct ChatView: View {
                 .padding(.bottom, 2)
             }
 
+            // 排队中的追加提示词
+            if let sid = state.currentSession?.id,
+               let queued = state.pendingPrompts[sid], !queued.isEmpty {
+                HStack(spacing: 7) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.orange)
+                    Text("排队中：\(queued)")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Spacer(minLength: 6)
+                    Button {
+                        state.pendingPrompts.removeValue(forKey: sid)
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 7)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.orange.opacity(0.08))
+            }
+
             // 附件预览
             if !state.attachments.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -459,7 +487,10 @@ struct ChatView: View {
                 Button {
                     inputFocused = false
                     Task {
-                        if state.isRunning {
+                        if state.isRunning
+                            && state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            && state.attachments.isEmpty {
+                            // 空输入 + 运行中 = 停止
                             await state.stop()
                         } else if let editing = editingItem {
                             let text = state.draft
@@ -474,7 +505,7 @@ struct ChatView: View {
                         }
                     }
                 } label: {
-                    Image(systemName: state.isRunning ? "stop.fill" : "arrow.up")
+                    Image(systemName: isQueueMode ? "arrow.up.to.line" : (state.isRunning ? "stop.fill" : "arrow.up"))
                         .font(.system(size: 15, weight: .bold))
                         .foregroundStyle(.white)
                         .frame(width: 34, height: 34)
@@ -482,7 +513,7 @@ struct ChatView: View {
                         .clipShape(Circle())
                 }
                 .buttonStyle(.plain)
-                .disabled(!state.isRunning && state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && state.attachments.isEmpty)
+                .disabled(!isQueueMode && !state.isRunning && state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && state.attachments.isEmpty)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
@@ -504,7 +535,14 @@ struct ChatView: View {
         .overlay(alignment: .top) { Divider().opacity(0.18) }
     }
 
+    /// 运行中且有内容 = 排队追加；运行中且空 = 停止
+    private var isQueueMode: Bool {
+        state.isRunning &&
+        (!state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !state.attachments.isEmpty)
+    }
+
     private var buttonColor: Color {
+        if isQueueMode { return Color.accentColor }
         if state.isRunning { return .red }
         let empty = state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && state.attachments.isEmpty
         return empty ? Color(.systemGray3) : Color.accentColor
