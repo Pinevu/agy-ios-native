@@ -77,7 +77,7 @@ struct MessageRow: View {
         case .images(let paths):
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(paths, id: \.self) { p in
-                    AuthImage(path: p, taskId: item.taskId)
+                    AuthImage(path: p, taskId: item.taskId, maxHeight: 420, corner: 12)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -102,7 +102,7 @@ struct MessageRow: View {
             }
             if !remotePaths.isEmpty {
                 ForEach(remotePaths, id: \.self) { p in
-                    AuthImage(path: p, maxWidth: 190, corner: 14)
+                    AuthImage(path: p, maxWidth: 190, maxHeight: 260, corner: 14)
                 }
             }
 

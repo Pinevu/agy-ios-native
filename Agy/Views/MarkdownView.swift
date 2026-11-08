@@ -10,7 +10,7 @@ struct MarkdownView: View {
     @State private var blocks: [MDBlock] = []
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
+        VStack(alignment: .leading, spacing: 7) {
             ForEach(blocks) { block in
                 blockView(block)
             }
@@ -286,9 +286,7 @@ struct ParagraphView: View {
             MathView(latex: tex, display: false, fontSize: 17)
 
         case .image(let path):
-            AuthImage(path: path)
-                .frame(maxWidth: 220)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            AuthImage(path: path, maxWidth: 220, maxHeight: 300, corner: 10)
         }
     }
 }
@@ -350,6 +348,8 @@ struct AuthImage: View {
     var taskId: String? = nil
     /// 最大展示宽度（默认铺满可用宽度）
     var maxWidth: CGFloat = .infinity
+    /// 最大展示高度：长图压到这条线以下，防止一图占几屏空白
+    var maxHeight: CGFloat = 460
     var corner: CGFloat = 12
     /// 列表里用缩略图，点开才拉原图
     var thumbWidth: Int = 600
@@ -364,7 +364,7 @@ struct AuthImage: View {
                 Image(uiImage: img)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
-                    .frame(maxWidth: maxWidth, alignment: .leading)
+                    .frame(maxWidth: maxWidth, maxHeight: maxHeight, alignment: .leading)
                     .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: corner, style: .continuous)
@@ -372,10 +372,18 @@ struct AuthImage: View {
                     )
                     .contentShape(Rectangle())
                     .onTapGesture { showFull = true }
+                    .contextMenu {
+                        Button {
+                            UIImageWriteToSavedPhotosAlbum(img, nil, nil, nil)
+                        } label: {
+                            Label("保存到相册", systemImage: "square.and.arrow.down")
+                        }
+                    }
             } else if loading {
                 RoundedRectangle(cornerRadius: corner, style: .continuous)
                     .fill(Color(.secondarySystemBackground))
-                    .frame(height: 130)
+                    .frame(maxWidth: maxWidth == .infinity ? 220 : maxWidth, alignment: .leading)
+                    .frame(height: 120)
                     .overlay(ProgressView().scaleEffect(0.85))
             } else {
                 HStack(spacing: 6) {
@@ -422,6 +430,17 @@ struct AuthImage: View {
                 }
                 VStack {
                     HStack {
+                        Button {
+                            if let img = image {
+                                UIImageWriteToSavedPhotosAlbum(img, nil, nil, nil)
+                            }
+                            showFull = false
+                        } label: {
+                            Image(systemName: "square.and.arrow.down")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .padding(10)
+                        }
                         Spacer()
                         Button { showFull = false } label: {
                             Image(systemName: "xmark")

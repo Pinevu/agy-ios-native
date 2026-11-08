@@ -646,7 +646,18 @@ final class AppState: ObservableObject {
             buf.append(ChatItem(kind: .error(text: ev.text ?? "未知错误")))
         case "end":
             if let imgs = ev.images, !imgs.isEmpty {
-                buf.append(ChatItem(kind: .images(imgs), taskId: ev.taskId))
+                var shown = Set<String>()
+                for it in buf {
+                    if case .assistant(let t) = it.kind {
+                        for m in t.matches(of: /!\[[^\]]*\]\(([^)]+)\)/) {
+                            shown.insert(String(m.output.1))
+                        }
+                    }
+                }
+                let fresh = imgs.filter { !shown.contains($0) }
+                if !fresh.isEmpty {
+                    buf.append(ChatItem(kind: .images(fresh), taskId: ev.taskId))
+                }
             }
             if let e = ev.error, !e.isEmpty {
                 buf.append(ChatItem(kind: .error(text: e)))
@@ -722,7 +733,19 @@ final class AppState: ObservableObject {
         case "end":
             assistantIndex = nil
             if let imgs = ev.images, !imgs.isEmpty {
-                items.append(ChatItem(kind: .images(imgs), taskId: ev.taskId))
+                // 正文里已经用 ![xxx](path) 配图展示过的，不再整批重复铺一遍
+                var shown = Set<String>()
+                for it in items {
+                    if case .assistant(let t) = it.kind {
+                        for m in t.matches(of: /!\[[^\]]*\]\(([^)]+)\)/) {
+                            shown.insert(String(m.output.1))
+                        }
+                    }
+                }
+                let fresh = imgs.filter { !shown.contains($0) }
+                if !fresh.isEmpty {
+                    items.append(ChatItem(kind: .images(fresh), taskId: ev.taskId))
+                }
             }
             if let e = ev.error, !e.isEmpty {
                 items.append(ChatItem(kind: .error(text: e)))
