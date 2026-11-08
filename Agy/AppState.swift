@@ -5,7 +5,7 @@ import Combine
 
 struct RunningTask {
     let taskId: String
-    let sessionId: String
+    var sessionId: String
     var conversationId: String?
     var stream: Task<Void, Never>?
     /// 会话标题（用于「运行中」列表展示）
@@ -87,6 +87,15 @@ final class AppState: ObservableObject {
             map[r.sessionId ?? r.taskId] = r
         }
         serverRunning = map
+
+        // 新建对话发出的任务，sessionId 先记的是 draft-xxx；
+        // 会话落库后按 conversation_id 反查真实 id 更正，否则「运行中」面板点不进去
+        for (tid, rt) in running where rt.sessionId.hasPrefix("draft-") {
+            let cid = rt.conversationId
+            if let s0 = sessions.first(where: { cid != nil && $0.conversationId == cid }) {
+                running[tid]?.sessionId = s0.id
+            }
+        }
 
         // 服务端说结束、本地还挂着的 → 收尾（finish 内部会补拉一次）
         for (tid, rt) in running where map[rt.sessionId] == nil {

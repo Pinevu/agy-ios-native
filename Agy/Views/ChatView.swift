@@ -727,21 +727,33 @@ struct ChatView: View {
 
     @ViewBuilder
     private func runningRow(_ rt: RunningTask) -> some View {
-        HStack(spacing: 11) {
-            ProgressView()
-                .scaleEffect(0.7)
-                .frame(width: 18)
+        // 整行是「切换到该会话」，右侧停止键独立，避免 Button 吞掉点击
+        ZStack(alignment: .trailing) {
+            Button {
+                jumpToRunning(rt)
+            } label: {
+                HStack(spacing: 11) {
+                    ProgressView()
+                        .scaleEffect(0.7)
+                        .frame(width: 18)
 
-            VStack(alignment: .leading, spacing: 3) {
-                Text(rt.title.isEmpty ? "新任务" : rt.title)
-                    .font(.system(size: 14.5, weight: .medium))
-                    .lineLimit(1)
-                Text(elapsedText(rt.startedAt))
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(.tertiary)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(rt.title.isEmpty ? "新任务" : rt.title)
+                            .font(.system(size: 14.5, weight: .medium))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        Text(elapsedText(rt.startedAt))
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.tertiary)
+                    }
+
+                    Spacer(minLength: 44)
+                }
+                .padding(.horizontal, 18)
+                .frame(height: 62)
+                .contentShape(Rectangle())
             }
-
-            Spacer(minLength: 8)
+            .buttonStyle(.plain)
 
             Button {
                 Task { await state.stop(taskId: rt.taskId) }
@@ -753,11 +765,8 @@ struct ChatView: View {
                     .background(Color.red, in: Circle())
             }
             .buttonStyle(.plain)
+            .padding(.trailing, 18)
         }
-        .padding(.horizontal, 18)
-        .frame(height: 62)
-        .contentShape(Rectangle())
-        .onTapGesture { jumpToRunning(rt) }
         .overlay(alignment: .bottom) {
             if rt.taskId != state.mergedRunning.last?.taskId {
                 Divider().opacity(0.35).padding(.leading, 47)
@@ -767,8 +776,31 @@ struct ChatView: View {
 
     private func jumpToRunning(_ rt: RunningTask) {
         showRunningList = false
-        if let target = state.sessions.first(where: { $0.id == rt.sessionId }) {
-            Task { await state.open(target) }
+        // ① 会话 id 直接命中
+        if let t = state.sessions.first(where: { $0.id == rt.sessionId }) {
+            Task { await state.open(t) }
+            return
+        }
+        // ② 新建对话发出的任务：sessionId 是 draft-xxx，用 conversationId 反查
+        if let cid = rt.conversationId,
+           let t = state.sessions.first(where: { $0.conversationId == cid }) {
+            Task { await state.open(t) }
+            return
+        }
+        // ③ 再不行按标题兜底
+        if !rt.title.isEmpty,
+           let t = state.sessions.first(where: { state.title(of: $0) == rt.title }) {
+            Task { await state.open(t) }
+            return
+        }
+        // ④ 会话列表可能过期，刷一次再说
+        Task {
+            await state.refreshSessions()
+            if let t = state.sessions.first(where: { $0.conversationId == rt.conversationId }) {
+                await state.open(t)
+            } else {
+                state.showToast("找不到对应会话，请下拉刷新列表")
+            }
         }
     }
 
