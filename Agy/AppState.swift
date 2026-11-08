@@ -510,7 +510,7 @@ final class AppState: ObservableObject {
             if let n = ev.name { buf.append(ChatItem(kind: .tool(name: n, input: ev.text ?? "", output: nil, seconds: nil, running: true))) }
         case "tool_done":
             if let i = buf.indices.last, case .tool(let n, let inp, _, _, _) = buf[i].kind {
-                buf[i].kind = .tool(name: n, input: inp, output: ev.output, seconds: ev.seconds, running: false)
+                buf[i].kind = .tool(name: n, input: inp, output: ev.output, seconds: ev.secs, running: false)
             }
         case "usage":
             if let u = ev.usage { buf.append(ChatItem(kind: .usage(text: u.summary))) }
