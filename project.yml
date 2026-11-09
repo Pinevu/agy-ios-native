@@ -20,7 +20,7 @@ targets:
       - path: Shared
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: cc.nooh.agy.native.widget
+        PRODUCT_BUNDLE_IDENTIFIER: app.lake9674.aquila8809.widget
         PRODUCT_NAME: AgyWidget
         SWIFT_VERSION: "5.9"
         CODE_SIGN_IDENTITY: ""
@@ -54,13 +54,13 @@ targets:
       - sdk: ActivityKit.framework
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: cc.nooh.agy.native
+        PRODUCT_BUNDLE_IDENTIFIER: app.lake9674.aquila8809
         PRODUCT_NAME: Agy
         INFOPLIST_FILE: Agy/Info.plist
         SWIFT_VERSION: "5.9"
         TARGETED_DEVICE_FAMILY: "1"
-        MARKETING_VERSION: "4.5.0"
-        CURRENT_PROJECT_VERSION: "27"
+        MARKETING_VERSION: "4.5.1"
+        CURRENT_PROJECT_VERSION: "28"
         CODE_SIGN_IDENTITY: ""
         CODE_SIGNING_REQUIRED: "NO"
         CODE_SIGNING_ALLOWED: "NO"
