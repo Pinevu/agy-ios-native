@@ -188,6 +188,8 @@ struct RunResponse: Decodable {
 enum ChatItemKind {
     case user(text: String, attachments: [Data], remotePaths: [String] = [])
     case assistant(text: String)
+    /// 模型在调用工具前写的一句说明，和正文分开渲染
+    case note(text: String)
     case thought(text: String)
     case tool(name: String, input: String, output: String?, seconds: Double?, running: Bool)
     case usage(text: String)

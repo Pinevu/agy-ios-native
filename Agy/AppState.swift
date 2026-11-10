@@ -685,6 +685,16 @@ final class AppState: ObservableObject {
         return t.isEmpty ? "Antigravity" : String(t.prefix(24))
     }
 
+
+    /// 一句短说明：不换行、不超过 30 字、不是列表或标题。
+    /// 用来把「工具前的那句中文」从正文里挑出来单独渲染。
+    private func isNote(_ t: String) -> Bool {
+        let s = t.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.isEmpty, s.count <= 30, !s.contains("\n") else { return false }
+        if s.hasPrefix("#") || s.hasPrefix("-") || s.hasPrefix("*") || s.hasPrefix("```") { return false }
+        return true
+    }
+
     // MARK: - 事件
 
     /// 非当前会话的事件：只追加到该任务的缓冲
@@ -751,6 +761,9 @@ final class AppState: ObservableObject {
                 }
             }
         case "tool":
+            if let i = buf.indices.last, case .assistant(let t) = buf[i].kind, isNote(t) {
+                buf[i].kind = .note(text: t.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
             if let n = ev.name { buf.append(ChatItem(kind: .tool(name: n, input: ev.text ?? "", output: nil, seconds: nil, running: true))) }
         case "tool_done":
             if let i = buf.indices.last, case .tool(let n, let inp, _, _, _) = buf[i].kind {
@@ -823,6 +836,11 @@ final class AppState: ObservableObject {
             items.append(ChatItem(kind: .thought(text: t)))
 
         case "tool":
+            // 工具前那句短说明从正文里剥离，单独渲染
+            flushText(taskId: taskId)
+            if let i = items.indices.last, case .assistant(let t) = items[i].kind, isNote(t) {
+                items[i].kind = .note(text: t.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
             assistantIndex = nil
             if let n = ev.name { LiveActivityManager.shared.update(step: n) }
             items.append(ChatItem(kind: .tool(name: ev.name ?? "tool",
@@ -933,6 +951,9 @@ final class AppState: ObservableObject {
                 appendAssistant(t)
 
             case "tool":
+                if let i = out.indices.last, case .assistant(let t) = out[i].kind, isNote(t) {
+                    out[i].kind = .note(text: t.trimmingCharacters(in: .whitespacesAndNewlines))
+                }
                 assistant = nil
                 out.append(ChatItem(kind: .tool(name: ev.name ?? "tool",
                                                 input: ev.params ?? ev.text ?? "",

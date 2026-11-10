@@ -19,6 +19,9 @@ struct MessageRow: View {
         case .user(let text, let attachments, let remotePaths):
             userBubble(text: text, attachments: attachments, remotePaths: remotePaths)
 
+        case .note(let text):
+            noteLine(text)
+
         case .assistant(let text):
             MarkdownView(text: text)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -82,6 +85,22 @@ struct MessageRow: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    /// 工具前的一句说明：小字号、次要色、圆点开头，和正文拉开差距
+    private func noteLine(_ text: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 7) {
+            Circle()
+                .fill(Color.accentColor.opacity(0.85))
+                .frame(width: 5, height: 5)
+                .padding(.top, 1)
+            Text(text)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.top, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - 用户气泡
