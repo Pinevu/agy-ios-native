@@ -35,6 +35,7 @@ class APIClient {
         cfg.timeoutIntervalForRequest = 60
         cfg.timeoutIntervalForResource = 1800
         cfg.waitsForConnectivity = true
+        cfg.httpMaximumConnectionsPerHost = 16
         session = URLSession(configuration: cfg)
         decoder = JSONDecoder()
         baseURLString = UserDefaults.standard.string(forKey: "agy_base_url") ?? "https://agy.nooh.cc"
@@ -213,6 +214,12 @@ class APIClient {
     func loadTaskImage(taskId: String, name: String, width: Int = 0) async -> UIImage? {
         let key = "\(taskId)/\(name)/\(width)" as NSString
         if let cached = imageCache.object(forKey: key) { return cached }
+        // 磁盘缓存：再次进入同一会话时直接读本地，不再重新下载
+        let file = imageDiskURL(key as String)
+        if let data = try? Data(contentsOf: file), let img = UIImage(data: data) {
+            imageCache.setObject(img, forKey: key)
+            return img
+        }
         guard let url = taskFileURL(taskId: taskId, name: name, width: width) else { return nil }
         var req = URLRequest(url: url)
         if let t = token { req.setValue("Bearer \(t)", forHTTPHeaderField: "Authorization") }
@@ -220,7 +227,18 @@ class APIClient {
               let http = resp as? HTTPURLResponse, http.statusCode == 200,
               let img = UIImage(data: data) else { return nil }
         imageCache.setObject(img, forKey: key)
+        try? data.write(to: file, options: .atomic)
         return img
+    }
+
+    /// 图片磁盘缓存目录，文件名用 key 的稳定哈希
+    private func imageDiskURL(_ key: String) -> URL {
+        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("agy-images", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        var h = UInt64(1469598103934665603)
+        for b in key.utf8 { h = (h ^ UInt64(b)) &* 1099511628211 }
+        return dir.appendingPathComponent(String(h, radix: 16) + ".img")
     }
 
     func loadImage(path: String) async -> UIImage? {

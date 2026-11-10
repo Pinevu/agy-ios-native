@@ -17,6 +17,10 @@ targets:
     platform: iOS
     sources:
       - path: AgyWidget
+        excludes:
+          - "Assets.xcassets"
+      - path: AgyWidget/Assets.xcassets
+        buildPhase: resources
       - path: Shared
     settings:
       base:
@@ -59,8 +63,8 @@ targets:
         INFOPLIST_FILE: Agy/Info.plist
         SWIFT_VERSION: "5.9"
         TARGETED_DEVICE_FAMILY: "1"
-        MARKETING_VERSION: "4.9.3"
-        CURRENT_PROJECT_VERSION: "35"
+        MARKETING_VERSION: "4.9.4"
+        CURRENT_PROJECT_VERSION: "36"
         CODE_SIGN_IDENTITY: ""
         CODE_SIGNING_REQUIRED: "NO"
         CODE_SIGNING_ALLOWED: "NO"

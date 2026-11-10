@@ -85,7 +85,7 @@ struct MessageRow: View {
                 .frame(width: 5, height: 5)
                 .padding(.top, 1)
             Text(text)
-                .font(.system(size: 12))
+                .font(.system(size: 11.5))
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }

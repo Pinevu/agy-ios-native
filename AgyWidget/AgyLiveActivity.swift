@@ -53,9 +53,9 @@ struct AgyLiveActivity: Widget {
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     HStack(spacing: 6) {
-                        Image(systemName: context.state.running ? "ellipsis" : "checkmark.circle.fill")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(context.state.running ? Color.orange : Color.green)
+                        Circle()
+                            .fill(context.state.running ? Color.orange : Color.green)
+                            .frame(width: 6, height: 6)
                         Text(context.state.step)
                             .font(.system(size: 12))
                             .foregroundStyle(.secondary)
@@ -79,16 +79,21 @@ struct AgyLiveActivity: Widget {
     }
 
     @ViewBuilder
+    /// 灵动岛上的标识：用 App 自己的图标，不再用系统转圈（黑底上是个黑圈）
     private func statusDot(_ s: AgyActivityAttributes.ContentState) -> some View {
-        if s.running {
-            ProgressView()
-                .scaleEffect(0.55)
-                .frame(width: 14, height: 14)
-        } else {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.green)
-        }
+        Image("AppLogo")
+            .resizable()
+            .scaledToFit()
+            .frame(width: 22, height: 22)
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .overlay(alignment: .bottomTrailing) {
+                if !s.running {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.green)
+                        .background(Circle().fill(.black).padding(1))
+                }
+            }
     }
 
     private func timeText(_ sec: Int) -> String {
