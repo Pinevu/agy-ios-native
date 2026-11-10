@@ -406,24 +406,37 @@ struct ChatView: View {
                 if let prev = previousUserItem() {
                     Button {
                         turnCursor = prev.0
+                        // 锚到轮次开头的上方留白，让用户发送的文字落在顶栏下面，而不是被顶栏盖住
                         withAnimation(.easeInOut(duration: 0.24)) {
-                            proxy.scrollTo(prev.1.id, anchor: .top)
+                            proxy.scrollTo(prev.1.id, anchor: UnitPoint(x: 0.5, y: 0.06))
                         }
                     } label: {
                         fabIcon("chevron.up")
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PressableButtonStyle())
                     .accessibilityLabel("回上一轮")
+                }
+                if let next = nextUserItem() {
+                    Button {
+                        turnCursor = next.0
+                        withAnimation(.easeInOut(duration: 0.24)) {
+                            proxy.scrollTo(next.1.id, anchor: UnitPoint(x: 0.5, y: 0.06))
+                        }
+                    } label: {
+                        fabIcon("chevron.down")
+                    }
+                    .buttonStyle(PressableButtonStyle())
+                    .accessibilityLabel("回下一轮")
                 }
                 Button {
                     turnCursor = -1
-                    withAnimation(.easeOut(duration: 0.24)) {
-                        proxy.scrollTo("bottom-sentinel", anchor: .bottom)
-                    }
+                    stickBottom = true
+                    showBackToBottom = false
+                    forceScrollToBottom(proxy)
                 } label: {
-                    fabIcon("arrow.down")
+                    fabIcon("arrow.down.to.line")
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressableButtonStyle())
                 .accessibilityLabel("回到底部")
             }
             .transition(.opacity.combined(with: .scale(scale: 0.9)))
@@ -442,17 +455,30 @@ struct ChatView: View {
             .overlay(Circle().stroke(Color.primary.opacity(0.10), lineWidth: 0.8))
     }
 
-    /// 返回（索引, 上一条用户消息），从当前游标往前找
-    private func previousUserItem() -> (Int, ChatItem)? {
-        let users = state.items.enumerated().filter {
-            if case .user = $0.element.kind { return true }
-            return false
+    /// 所有用户消息（一轮 = 一次发送）
+    private var userTurns: [(Int, ChatItem)] {
+        state.items.enumerated().compactMap { idx, item in
+            if case .user = item.kind { return (idx, item) }
+            return nil
         }
+    }
+
+    /// 上一个起点：在底部时从「倒数第二轮」起跳（最后一轮就是眼前这条，跳它等于没动）
+    private func previousUserItem() -> (Int, ChatItem)? {
+        let users = userTurns
         guard !users.isEmpty else { return nil }
-        let start = turnCursor < 0 ? users.count - 1 : turnCursor - 1
+        let start = turnCursor < 0 ? users.count - 2 : turnCursor - 1
         guard start >= 0, start < users.count else { return nil }
-        let pair = users[start]
-        return (start, pair.element)
+        return users[start]
+    }
+
+    /// 下一轮；已经在底部时没有下一轮
+    private func nextUserItem() -> (Int, ChatItem)? {
+        let users = userTurns
+        guard turnCursor >= 0 else { return nil }
+        let start = turnCursor + 1
+        guard start >= 0, start < users.count else { return nil }
+        return users[start]
     }
 
     private func dismissKeyboard() {

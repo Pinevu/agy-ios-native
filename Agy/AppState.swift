@@ -344,16 +344,10 @@ final class AppState: ObservableObject {
         if ok {
             isLoggedIn = true
             await refreshSessions()
-            if currentSession == nil {
-                let lastId = UserDefaults.standard.string(forKey: "agy_last_session")
-                if lastId == "draft" {
-                    // 上次停在新建对话 → 保持空白页
-                } else if let lastId, let target = sessions.first(where: { $0.id == lastId }) {
-                    await open(target)          // 回到上次那页
-                } else if let first = sessions.first {
-                    await open(first)
-                }
-            }
+            // 每次打开都停在新建对话页，历史任务从抽屉里点进去
+            currentSession = nil
+            conversationId = nil
+            items = []
         } else {
             api.setToken(nil)
             isLoggedIn = false
