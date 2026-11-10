@@ -175,10 +175,10 @@ struct ToolCardView: View {
                             .font(.system(size: 10, weight: .bold))
                             .foregroundStyle(.green)
                     }
-                    Text(name)
-                        .font(.system(size: 12.5, weight: .medium, design: .monospaced))
-                    Text(summary)
-                        .font(.system(size: 12, design: .monospaced))
+                    Text(ToolDescribe.title(name))
+                        .font(.system(size: 13, weight: .medium))
+                    Text(ToolDescribe.detail(name: name, input: input))
+                        .font(.system(size: 12.5))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                     Spacer(minLength: 4)
@@ -201,6 +201,7 @@ struct ToolCardView: View {
             if expanded {
                 Divider().opacity(0.5)
                 VStack(alignment: .leading, spacing: 8) {
+                    sectionLabel(name)
                     if !input.isEmpty {
                         sectionLabel("参数")
                         Text(input)

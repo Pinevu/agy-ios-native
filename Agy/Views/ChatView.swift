@@ -302,7 +302,7 @@ struct ChatView: View {
                     if state.isRunning {
                         HStack(spacing: 7) {
                             ProgressView().scaleEffect(0.7)
-                            Text("正在思考与执行…")
+                            Text(state.items.isEmpty ? "正在准备…" : "正在思考与执行…")
                                 .font(.system(size: 12.5))
                                 .foregroundStyle(.secondary)
                         }
