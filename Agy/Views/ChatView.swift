@@ -330,7 +330,9 @@ struct ChatView: View {
                 // 内容变高（图片/公式陆续布局完）→ 贴底跟随，但节流，避免滚动死循环
                 guard stickBottom else { return }
                 let now = Date()
-                guard now.timeIntervalSince(lastAutoScroll) > 0.35 else { return }
+                // 任务运行中跟紧一点（120ms），空闲时放宽（350ms）避免滚动死循环
+                let gap = state.isRunning ? 0.12 : 0.35
+                guard now.timeIntervalSince(lastAutoScroll) > gap else { return }
                 lastAutoScroll = now
                 withAnimation(nil) { proxy.scrollTo("bottom-sentinel", anchor: .bottom) }
             }

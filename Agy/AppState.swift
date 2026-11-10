@@ -940,7 +940,14 @@ final class AppState: ObservableObject {
                         body.append(line)
                     }
                 }
-                let shown = body.isEmpty ? "已发送图片" : body.joined(separator: "\n")
+                var shown = body.isEmpty ? "已发送图片" : body.joined(separator: "\n")
+                // 首轮注入的行为约定不展示给用户
+                if let r = shown.range(of: "【行为约定】") {
+                    let after = shown[r.lowerBound...]
+                    if let end = after.range(of: "\n\n") {
+                        shown = String(after[end.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                    }
+                }
                 out.append(ChatItem(kind: .user(text: shown, attachments: [], remotePaths: paths),
                                     taskId: ev.taskId,
                                     rawText: shown))
