@@ -98,7 +98,10 @@ final class AppState: ObservableObject {
         }
 
         // 服务端说结束、本地还挂着的 → 收尾（finish 内部会补拉一次）
-        for (tid, rt) in running where map[rt.sessionId] == nil {
+        // draft- 开头的是新建对话还没落库的任务，服务端按真实 session 登记，
+        // 这里对不上 key，绝不能当成「已结束」收掉，否则任务还在跑就被停掉
+        for (tid, rt) in running
+            where !rt.sessionId.hasPrefix("draft-") && map[rt.sessionId] == nil {
             finish(taskId: tid)
         }
 
@@ -114,6 +117,8 @@ final class AppState: ObservableObject {
 
     /// 防止同一会话反复补拉
     private var lastReconciled: [String: Date] = [:]
+    /// 每个任务的断流重连次数（退避用）
+    private var reconnects: [String: Int] = [:]
 
     /// 新会话（还没落库）用的临时 key，初值就有，保证任何时刻都有归属
     private var draftSessionKey = "draft-\(UUID().uuidString)"
@@ -588,9 +593,33 @@ final class AppState: ObservableObject {
         let task = api.stream(taskId: taskId, onEvent: { [weak self] ev in
             Task { @MainActor in self?.handle(ev, taskId: taskId) }
         }, onClose: { [weak self] in
-            Task { @MainActor in self?.finish(taskId: taskId) }
+            // 连接断了不等于任务结束：代理/网络会掐掉长时间无数据的 SSE。
+            // 先问服务端，还在跑就重连，确认结束才收尾。
+            Task { @MainActor in self?.streamClosed(taskId: taskId) }
         })
         running[taskId]?.stream = task
+    }
+
+    /// SSE 断开后的判定：任务还在服务端跑 → 退避重连；确实结束 → 收尾
+    private func streamClosed(taskId: String) async {
+        guard running[taskId] != nil else { return }
+        await syncRunning()
+        guard running[taskId] != nil else { return }
+
+        // 只认「这个任务」还在跑。draft 会话对不上 session key，按任务 id 认
+        let still = serverRunning.values.contains { $0.taskId == taskId }
+        if still {
+            let n = (reconnects[taskId] ?? 0) + 1
+            reconnects[taskId] = n
+            // 1s、2s、4s … 最多 8s，任务再长也不会放弃
+            let delay = UInt64(min(1 << min(n - 1, 3), 8)) * 1_000_000_000
+            try? await Task.sleep(nanoseconds: delay)
+            guard running[taskId] != nil else { return }
+            listen(taskId: taskId)
+        } else {
+            reconnects.removeValue(forKey: taskId)
+            finish(taskId: taskId)
+        }
     }
 
     /// 任务收尾：落盘缓冲、清理运行态、检查排队提示词
@@ -621,6 +650,7 @@ final class AppState: ObservableObject {
             items = buf
         }
         taskBuffers.removeValue(forKey: taskId)
+        reconnects.removeValue(forKey: taskId)
         running.removeValue(forKey: taskId)
 
         // 有排队的追加提示词 → 自动发出
