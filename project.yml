@@ -59,7 +59,7 @@ targets:
         INFOPLIST_FILE: Agy/Info.plist
         SWIFT_VERSION: "5.9"
         TARGETED_DEVICE_FAMILY: "1"
-        MARKETING_VERSION: "4.5.1"
+        MARKETING_VERSION: "4.6.0"
         CURRENT_PROJECT_VERSION: "28"
         CODE_SIGN_IDENTITY: ""
         CODE_SIGNING_REQUIRED: "NO"
