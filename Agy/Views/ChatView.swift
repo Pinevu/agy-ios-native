@@ -380,6 +380,9 @@ struct ChatView: View {
                 if running {
                     withAnimation { proxy.scrollTo("running", anchor: .bottom) }
                     turnCursor = -1
+                } else if stickBottom {
+                    // 结束时「正在思考」行被移除，内容变矮，滚动位置不变就会悬在空白区
+                    forceScrollToBottom(proxy)
                 }
             }
             .onChange(of: state.streamTick) { _ in
