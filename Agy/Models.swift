@@ -22,7 +22,18 @@ struct Session: Decodable, Identifiable, Hashable {
     }
 
     var displayTitle: String {
-        let raw = title ?? prompt ?? "（无标题会话）"
+        var raw = title ?? prompt ?? "（无标题会话）"
+        // 首轮注入的行为约定不进标题
+        if let r = raw.range(of: "【行为约定】"), raw.distance(from: raw.startIndex, to: r.lowerBound) < 5 {
+            let after = raw[r.lowerBound...]
+            if let end = after.range(of: "\n\n") {
+                raw = String(after[end.upperBound...])
+            } else if let nl = after.range(of: "\n") {
+                raw = String(after[nl.upperBound...])
+            }
+        }
+        raw = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if raw.isEmpty { raw = "（无标题会话）" }
         return raw
             .split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: true)
             .first.map(String.init) ?? raw
