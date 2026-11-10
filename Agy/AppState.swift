@@ -595,7 +595,7 @@ final class AppState: ObservableObject {
         }, onClose: { [weak self] in
             // 连接断了不等于任务结束：代理/网络会掐掉长时间无数据的 SSE。
             // 先问服务端，还在跑就重连，确认结束才收尾。
-            Task { @MainActor in self?.streamClosed(taskId: taskId) }
+            Task { @MainActor in await self?.streamClosed(taskId: taskId) }
         })
         running[taskId]?.stream = task
     }
