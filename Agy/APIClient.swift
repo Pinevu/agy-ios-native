@@ -3,12 +3,14 @@ import UIKit
 
 enum APIError: LocalizedError {
     case unauthorized
+    case badPassword
     case server(String)
     case decoding(String)
 
     var errorDescription: String? {
         switch self {
         case .unauthorized: return "登录已过期，请重新登录"
+        case .badPassword: return "密码错误"
         case .server(let m): return m
         case .decoding(let m): return "数据解析失败：\(m)"
         }
@@ -80,7 +82,11 @@ class APIClient {
         let req = makeRequest(path, method: method, body: body)
         let (data, resp) = try await session.data(for: req)
         guard let http = resp as? HTTPURLResponse else { throw APIError.server("无响应") }
-        if http.statusCode == 401 { throw APIError.unauthorized }
+        if http.statusCode == 401 {
+            // 登录接口的 401 是密码错，其它接口的 401 才是令牌过期
+            if path == "api/login" { throw APIError.badPassword }
+            throw APIError.unauthorized
+        }
         if http.statusCode >= 400 {
             // 服务端错误体是 {"error": "..."}，取出可读文案，不要把 JSON 原样抛给界面
             let friendly = (try? decoder.decode(ErrorBody.self, from: data))?.error
