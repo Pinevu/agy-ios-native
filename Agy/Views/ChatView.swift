@@ -3,6 +3,7 @@ import UIKit
 import PhotosUI
 
 /// iOS 17+ 的默认滚动锚点，冷启动直接贴底，避免懒加载白屏
+
 struct BottomAnchorModifier: ViewModifier {
     func body(content: Content) -> some View {
         if #available(iOS 17.0, *) {
@@ -361,6 +362,14 @@ struct ChatView: View {
             }
             .id(state.currentSession?.id ?? "draft")
             .scrollDismissesKeyboard(.interactively)
+            .overlay {
+                // 会话内容还在加载时盖住列表，不让视口落在空白区
+                if state.loadingSession != nil && state.items.isEmpty {
+                    loadingState
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(Color(.systemBackground))
+                }
+            }
             .overlay(alignment: .bottomTrailing) {
                 floatingButtons(proxy)
                     .padding(.trailing, 12)

@@ -135,8 +135,13 @@ final class AppState: ObservableObject {
         if let local = running.values.first(where: { $0.sessionId == sid }) {
             return local
         }
-        // 本地没有但服务端在跑 → 用服务端信息兜底（App 重启 / 状态漂移时也能显示停止键）
-        guard let sr = serverRunning[sid] else { return nil }
+        // 本地没有但服务端在跑 → 兜底显示停止键。
+        // 按会话 id、conversationId、任务 id 三种都认，避免从灵动岛回来时 id 对不上导致键消失
+        let cid = currentSession?.conversationId
+        guard let sr = serverRunning[sid]
+            ?? serverRunning.values.first(where: { $0.conversationId == cid && cid != nil })
+            ?? serverRunning.values.first(where: { $0.taskId == sid })
+            else { return nil }
         return RunningTask(taskId: sr.taskId,
                            sessionId: sid,
                            conversationId: sr.conversationId,
