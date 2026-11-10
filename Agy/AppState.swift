@@ -32,6 +32,8 @@ final class AppState: ObservableObject {
     private var sessionItems: [String: [ChatItem]] = [:]
     /// 服务端权威运行表：sessionId -> ServerRunning
     @Published var serverRunning: [String: ServerRunning] = [:]
+    /// 流式文本落盘计数：界面据此跟随到底部（不依赖内容高度测量）
+    @Published var streamTick: Int = 0
     /// 后台任务的条目缓冲（不参与 @Published，避免流式时狂刷 UI）
     private var taskBuffers: [String: [ChatItem]] = [:]
     /// 流式文本节流缓冲
@@ -736,6 +738,7 @@ final class AppState: ObservableObject {
                 items.append(ChatItem(kind: .assistant(text: chunk)))
                 assistantIndex = items.count - 1
             }
+            streamTick &+= 1
             taskBuffers[taskId] = items
         } else {
             var buf = taskBuffers[taskId] ?? []

@@ -13,6 +13,8 @@ struct MessageActions {
 struct MessageRow: View {
     let item: ChatItem
     var actions: MessageActions = .none
+    /// 点按弹出的消息菜单，挂在列表外层，避免每行一个 dialog
+    @Binding var assistantMenu: ChatItem?
 
     var body: some View {
         switch item.kind {
@@ -26,20 +28,8 @@ struct MessageRow: View {
             MarkdownView(text: text)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .textSelection(.enabled)
-                .contextMenu {
-                    Button {
-                        UIPasteboard.general.string = text
-                    } label: { Label("复制", systemImage: "doc.on.doc") }
-
-                    if let r = actions.retry {
-                        Button { r(item) } label: { Label("重试", systemImage: "arrow.clockwise") }
-                    }
-                    if let d = actions.deleteFrom {
-                        Button(role: .destructive) { d(item) } label: {
-                            Label("从此处删除", systemImage: "trash")
-                        }
-                    }
-                }
+                // 长按留给系统做自由选取；菜单改用点按弹出
+                .onTapGesture { assistantMenu = item }
 
         case .thought(let text):
             HStack(alignment: .top, spacing: 6) {

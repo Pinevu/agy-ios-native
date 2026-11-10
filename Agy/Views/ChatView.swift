@@ -39,6 +39,8 @@ struct ChatView: View {
     @State private var showPhotoPicker = false
     @State private var showFileImporter = false
     @State private var showCamera = false
+    /// 点按某条助手消息后弹出的操作菜单
+    @State private var assistantMenu: ChatItem? = nil
     @State private var capturedImage: UIImage?
     @FocusState private var inputFocused: Bool
     @State private var editingItem: ChatItem?
@@ -106,6 +108,27 @@ struct ChatView: View {
         }
         .animation(.easeInOut(duration: 0.2), value: state.toast)
         .animation(.easeOut(duration: 0.24), value: showDrawer)
+        .confirmationDialog("消息", isPresented: Binding(
+            get: { assistantMenu != nil },
+            set: { if !$0 { assistantMenu = nil } }
+        ), titleVisibility: .hidden) {
+            if let item = assistantMenu {
+                Button("复制全文") {
+                    let t: String
+                    if case .assistant(let x) = item.kind { t = x } else { t = "" }
+                    UIPasteboard.general.string = t
+                }
+                Button("重试") {
+                    let it = item
+                    Task { inputFocused = false; await state.retry(itemId: it.id) }
+                }
+                Button("从此处删除", role: .destructive) {
+                    let it = item
+                    Task { await state.deleteFrom(itemId: it.id) }
+                }
+            }
+            Button("取消", role: .cancel) {}
+        }
         .sheet(isPresented: $showRunningList) { runningSheet }
         .sheet(isPresented: $showModelPicker) { modelSheet }
         .sheet(isPresented: $showQuota) { QuotaSheet() }
@@ -350,6 +373,11 @@ struct ChatView: View {
                     turnCursor = -1
                 }
             }
+            .onChange(of: state.streamTick) { _ in
+                // 流式文字在既有行里增长，内容总高度不一定变，这里直接跟随
+                guard stickBottom else { return }
+                withAnimation(nil) { proxy.scrollTo("bottom-sentinel", anchor: .bottom) }
+            }
             .onChange(of: state.currentSession?.id) { _ in
                 turnCursor = -1
                 forceScrollToBottom(proxy)
@@ -380,9 +408,8 @@ struct ChatView: View {
             deleteFrom: { it in
                 Task { await state.deleteFrom(itemId: it.id) }
             }
-        ))
+        ), assistantMenu: $assistantMenu)
         .id(item.id)
-        .heightCached(item.id)
     }
 
     // MARK: - 悬浮滚动按钮
