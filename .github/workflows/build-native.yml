@@ -45,14 +45,19 @@ jobs:
         run: |
           mkdir -p Payload
           cp -r build/Build/Products/Release-iphoneos/Agy.app Payload/
-          zip -r -9 AgyNative.ipa Payload
-          ls -lh AgyNative.ipa
+          VER=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" Payload/Agy.app/Info.plist)
+          BUILD=$(/usr/libexec/PlistBuddy -c "Print CFBundleVersion" Payload/Agy.app/Info.plist)
+          NAME="Antigravity-${VER}-${BUILD}.ipa"
+          zip -r -9 "$NAME" Payload
+          cp "$NAME" Antigravity.ipa
+          ls -lh *.ipa
+          echo "IPA_NAME=$NAME" >> "$GITHUB_ENV"
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Agy-Native-IPA
-          path: AgyNative.ipa
+          name: Antigravity-${{ env.IPA_NAME }}
+          path: Antigravity.ipa
           if-no-files-found: error
           retention-days: 14
 
