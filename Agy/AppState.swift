@@ -266,6 +266,7 @@ final class AppState: ObservableObject {
         if let cur = currentSession?.id { sessionItems[cur] = items }
         currentInstanceId = inst.id
         api.setBase(inst.url)
+        loadModelForCurrentInstance()
         // 清空现场
         sessions = []
         currentSession = nil
@@ -346,6 +347,7 @@ final class AppState: ObservableObject {
     // MARK: - 启动
 
     func bootstrap() async {
+        loadModelForCurrentInstance()
         guard api.isLoggedIn else { isLoggedIn = false; return }
         let ok = await api.checkSession()
         if ok {
@@ -1018,9 +1020,18 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// 每个实例各自记一个模型，切实例不串
+    private func modelKey(for url: String) -> String { "agy_model::" + url }
+
     func setModel(_ id: String) {
         model = id
-        UserDefaults.standard.set(id, forKey: "agy_model")
+        UserDefaults.standard.set(id, forKey: modelKey(for: api.baseURLString))
+    }
+
+    /// 切到某实例时，读回它自己上次选的模型
+    func loadModelForCurrentInstance() {
+        let saved = UserDefaults.standard.string(forKey: modelKey(for: api.baseURLString))
+        model = saved ?? "gemini-3.8-flash-high"
     }
 
     func deleteSession(_ s: Session) async {
