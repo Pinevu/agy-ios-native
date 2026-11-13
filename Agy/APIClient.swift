@@ -173,6 +173,13 @@ class APIClient {
         try await send("api/skills", as: [Skill].self)
     }
 
+    /// 服务端当前账号真实可用的模型
+    func models() async throws -> [ModelInfo] {
+        struct Resp: Decodable { let models: [ModelInfo] }
+        let r = try await send("api/models", as: Resp.self)
+        return r.models
+    }
+
     func deleteSkill(_ name: String) async {
         _ = try? await send("api/skills/\(name)", method: "DELETE", as: EmptyResponse.self)
     }

@@ -751,7 +751,7 @@ struct ChatView: View {
 
     /// 模型弹层高度：标题 56 + 每行 54 + 底部留白，最少 300
     private var modelSheetHeight: CGFloat {
-        let rows = CGFloat(AppState.models.count)
+        let rows = CGFloat(state.modelOptions.count)
         return min(56 + rows * 54 + 24, 560)
     }
 
@@ -897,7 +897,7 @@ struct ChatView: View {
 
             ScrollView {
                 VStack(spacing: 0) {
-                    ForEach(AppState.models, id: \.id) { m in
+                    ForEach(state.modelOptions, id: \.id) { m in
                         Button {
                             state.setModel(m.id)
                             showModelPicker = false
@@ -924,7 +924,7 @@ struct ChatView: View {
                         }
                         .buttonStyle(.plain)
 
-                        if m.id != AppState.models.last?.id {
+                        if m.id != state.modelOptions.last?.id {
                             Divider().opacity(0.35).padding(.leading, 18)
                         }
                     }

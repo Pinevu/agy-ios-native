@@ -267,6 +267,7 @@ final class AppState: ObservableObject {
         currentInstanceId = inst.id
         api.setBase(inst.url)
         loadModelForCurrentInstance()
+        await refreshModels()
         // 清空现场
         sessions = []
         currentSession = nil
@@ -331,6 +332,10 @@ final class AppState: ObservableObject {
         let short: String
     }
 
+    /// 当前实例真实可用的模型（服务端拉取，按账号权限）
+    @Published var modelOptions: [ModelOption] = AppState.models
+
+    /// 兜底列表：拉不到服务端时才用
     static let models: [ModelOption] = [
         ModelOption(id: "gemini-3.8-flash-high", name: "Gemini 3.8 Flash · High", short: "Flash High"),
         ModelOption(id: "gemini-3.8-flash-medium", name: "Gemini 3.8 Flash · Medium", short: "Flash Med"),
@@ -348,6 +353,7 @@ final class AppState: ObservableObject {
 
     func bootstrap() async {
         loadModelForCurrentInstance()
+        await refreshModels()
         guard api.isLoggedIn else { isLoggedIn = false; return }
         let ok = await api.checkSession()
         if ok {
@@ -370,6 +376,7 @@ final class AppState: ObservableObject {
         do {
             _ = try await api.login(password: password)
             isLoggedIn = true
+            await refreshModels()
             await refreshSessions()
             if let first = sessions.first { await open(first) }
         } catch {
@@ -1032,6 +1039,33 @@ final class AppState: ObservableObject {
     func loadModelForCurrentInstance() {
         let saved = UserDefaults.standard.string(forKey: modelKey(for: api.baseURLString))
         model = saved ?? "gemini-3.8-flash-high"
+    }
+
+    /// 从服务端拉当前账号真实可用的模型；当前选中的不在列表里就切到第一个
+    func refreshModels() async {
+        guard let list = try? await api.models(), !list.isEmpty else { return }
+        let opts = list.map { m in
+            ModelOption(id: m.id, name: Self.prettyName(m.name), short: Self.shortName(m.name))
+        }
+        modelOptions = opts
+        if !opts.contains(where: { $0.id == model }) {
+            setModel(opts[0].id)
+        }
+    }
+
+    /// "Gemini 4 Argon (Medium)" → "Gemini 4 Argon · Medium"
+    private static func prettyName(_ raw: String) -> String {
+        raw.replacingOccurrences(of: " (", with: " · ")
+           .replacingOccurrences(of: ")", with: "")
+    }
+
+    /// 标题栏用的短名
+    private static func shortName(_ raw: String) -> String {
+        let t = raw.replacingOccurrences(of: ")", with: "")
+        let parts = t.components(separatedBy: " (")
+        guard parts.count == 2 else { return String(t.prefix(18)) }
+        let head = parts[0].replacingOccurrences(of: "Gemini ", with: "")
+        return "\(head) \(parts[1])"
     }
 
     func deleteSession(_ s: Session) async {

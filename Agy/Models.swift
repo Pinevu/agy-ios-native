@@ -216,3 +216,9 @@ struct ChatItem: Identifiable {
     /// 原文（不含附件路径），编辑时回填
     var rawText: String? = nil
 }
+
+
+struct ModelInfo: Decodable, Hashable, Identifiable {
+    let id: String
+    let name: String
+}
