@@ -430,7 +430,7 @@ struct ChatView: View {
 
     /// 强制贴底：重置滚动状态并多次重试，兜住图片/公式的布局耗时。
     /// 不能受 showBackToBottom 影响 —— 否则「滚偏了 → 按钮出现 → 不敢滚」会死锁成白屏。
-    private func forceScrollToBottom(_ proxy: ScrollViewProxy, immediate: Bool = False) {
+    private func forceScrollToBottom(_ proxy: ScrollViewProxy, immediate: Bool = false) {
         showBackToBottom = false
         stickBottom = true
         let delays = immediate ? [0.02] : [0.02, 0.12, 0.3, 0.7]

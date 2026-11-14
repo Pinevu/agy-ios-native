@@ -33,7 +33,7 @@ struct MarkdownView: View {
 
         case .paragraph(let t):
             if let callout = Callout.parse(t) {
-                CalloutView(callout: callout)
+                CalloutView(callout: callout, isLive: isLive)
             } else {
                 ParagraphView(text: t, isLive: isLive)
             }
@@ -66,7 +66,7 @@ struct MarkdownView: View {
 
         case .quote(let t):
             if let callout = Callout.parse(t) {
-                CalloutView(callout: callout)
+                CalloutView(callout: callout, isLive: isLive)
             } else {
                 HStack(alignment: .top, spacing: 10) {
                     RoundedRectangle(cornerRadius: 1.5)
@@ -150,6 +150,7 @@ struct Callout {
 }
 
 struct CalloutView: View {
+    var isLive: Bool = false
     let callout: Callout
 
     var body: some View {
