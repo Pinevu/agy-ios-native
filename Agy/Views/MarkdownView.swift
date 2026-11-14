@@ -42,21 +42,21 @@ struct MarkdownView: View {
                     HStack(alignment: .firstTextBaseline, spacing: 9) {
                         Circle()
                             .fill(Color.secondary.opacity(0.55))
-                            .frame(width: 5, height: 5)
+                            .frame(width: 5.5, height: 5.5)
                             .offset(y: -3)
                         ParagraphView(text: item)
                     }
                 }
             }
 
-        case .numbered(let arr):
+        case .numbered(let start, let arr):
             VStack(alignment: .leading, spacing: 11) {
                 ForEach(Array(arr.enumerated()), id: \.offset) { idx, item in
                     HStack(alignment: .firstTextBaseline, spacing: 9) {
-                        Text("\(idx + 1).")
-                            .font(.system(size: 15, weight: .medium))
+                        Text("\(start + idx).")
+                            .font(.system(size: 16, weight: .medium))
                             .foregroundStyle(.secondary)
-                            .frame(minWidth: 18, alignment: .leading)
+                            .frame(minWidth: 20, alignment: .leading)
                         ParagraphView(text: item)
                     }
                 }
@@ -201,11 +201,11 @@ struct ParagraphView: View {
             guard case .text(let t, let bold, let code) = seg else { continue }
             var a = AttributedString(t)
             if code {
-                a.font = .system(size: 15, design: .monospaced)
+                a.font = .system(size: 15.5, design: .monospaced)
                 a.foregroundColor = .accentColor
                 a.backgroundColor = Color(.secondarySystemBackground)
             } else {
-                a.font = .system(size: 17, weight: bold ? .semibold : .regular)
+                a.font = .system(size: 18, weight: bold ? .semibold : .regular)
             }
             out.append(a)
         }
@@ -227,16 +227,16 @@ struct ParagraphView: View {
             case .text(let t, let bold, let code):
                 var a = AttributedString(t)
                 if code {
-                    a.font = .system(size: 15, design: .monospaced)
+                    a.font = .system(size: 15.5, design: .monospaced)
                     a.foregroundColor = .accentColor
                 } else {
-                    a.font = .system(size: 17, weight: bold ? .semibold : .regular)
+                    a.font = .system(size: 18, weight: bold ? .semibold : .regular)
                 }
                 out.append(a)
             case .math(let tex):
                 var a = AttributedString(LatexToUnicode.convert(tex))
                 // 公式用衬线体，与正文区分开
-                a.font = .system(size: 17, design: .serif)
+                a.font = .system(size: 18, design: .serif)
                 a.foregroundColor = .primary
                 out.append(a)
             case .image:
@@ -249,7 +249,7 @@ struct ParagraphView: View {
     var body: some View {
         if hasMath {
             // 行内公式转 Unicode 后同样走可选文本，复制跟手
-            SelectableText(attributed: nsAttributed(attributedWithMath, lineGap: 5))
+            SelectableText(attributed: nsAttributed(attributedWithMath, lineGap: 6))
                 .frame(maxWidth: .infinity, alignment: .leading)
         } else if needsFlow {
             FlowLayout(spacing: 3, lineSpacing: 8) {
@@ -257,7 +257,7 @@ struct ParagraphView: View {
             }
         } else {
             // 纯文本走 UIKit：选择和复制跟手，不跟外层滚动抢手势
-            SelectableText(attributed: nsAttributed(attributed, lineGap: 5))
+            SelectableText(attributed: nsAttributed(attributed, lineGap: 6))
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -271,7 +271,7 @@ struct ParagraphView: View {
         let m = NSMutableAttributedString(attributedString: ns)
         let style = NSMutableParagraphStyle()
         style.lineSpacing = lineGap
-        style.paragraphSpacing = 6
+        style.paragraphSpacing = 7
         m.addAttribute(.paragraphStyle, value: style,
                        range: NSRange(location: 0, length: m.length))
         return m
@@ -291,7 +291,7 @@ struct ParagraphView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
             } else {
                 Text(t)
-                    .font(.system(size: 17, weight: bold ? .semibold : .regular))
+                    .font(.system(size: 18, weight: bold ? .semibold : .regular))
             }
 
         case .math(let tex):

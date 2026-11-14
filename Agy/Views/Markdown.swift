@@ -6,7 +6,7 @@ enum MDBlock: Identifiable {
     case heading(level: Int, text: String)
     case paragraph(String)
     case bullets([String])
-    case numbered([String])
+    case numbered(start: Int, items: [String])
     case quote(String)
     case code(lang: String, code: String)
     case math(String)
@@ -17,7 +17,7 @@ enum MDBlock: Identifiable {
         case .heading(let l, let t): return "h\(l)-\(t.hashValue)"
         case .paragraph(let t): return "p-\(t.hashValue)"
         case .bullets(let a): return "ul-\(a.joined().hashValue)"
-        case .numbered(let a): return "ol-\(a.joined().hashValue)"
+        case .numbered(let st, let a): return "ol-\(st)-\(a.joined().hashValue)"
         case .quote(let t): return "q-\(t.hashValue)"
         case .code(let l, let c): return "c-\(l)-\(c.hashValue)"
         case .math(let t): return "m-\(t.hashValue)"
@@ -188,6 +188,11 @@ enum MarkdownParser {
             if let _ = line.range(of: #"^\d+\.\s"#, options: .regularExpression) {
                 flushParagraph(&para)
                 var acc: [String] = []
+                // 取这一组第一个条目的源码编号，保证「1. 2.」连续不打回 1
+                var start = 1
+                if let sp = line.range(of: #"^\d+"#, options: .regularExpression) {
+                    start = Int(line[sp]) ?? 1
+                }
                 while i < lines.count {
                     let l = lines[i].trimmingCharacters(in: .whitespaces)
                     if let r = l.range(of: #"^\d+\.\s"#, options: .regularExpression) {
@@ -205,7 +210,7 @@ enum MarkdownParser {
                         break
                     }
                 }
-                blocks.append(.numbered(acc))
+                blocks.append(.numbered(start: start, items: acc))
                 continue
             }
 
