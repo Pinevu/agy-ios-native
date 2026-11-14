@@ -85,7 +85,7 @@ struct MessageRow: View {
                 .frame(width: 5, height: 5)
                 .padding(.top, 1)
             Text(text)
-                .font(.system(size: 11.5))
+                .font(.system(size: 12.5))
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -185,7 +185,7 @@ struct ToolCardView: View {
                             .foregroundStyle(.green)
                     }
                     Text(ToolDescribe.title(name))
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.system(size: 12.5, weight: .medium))
                     Text(ToolDescribe.detail(name: name, input: input))
                         .font(.system(size: 12.5))
                         .foregroundStyle(.secondary)

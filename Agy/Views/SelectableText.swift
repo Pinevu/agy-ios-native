@@ -9,6 +9,8 @@ struct SelectableText: UIViewRepresentable {
     func makeUIView(context: Context) -> SelectableLabel {
         let v = SelectableLabel()
         v.backgroundColor = .clear
+        // 与正文一致的基础字号，属性缺失时也不会掉回 17pt
+        v.font = .systemFont(ofSize: 18)
         v.isEditable = false
         v.isSelectable = true
         v.isScrollEnabled = false

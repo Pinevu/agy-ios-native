@@ -281,8 +281,12 @@ struct ParagraphView: View {
     /// AttributedString → NSAttributedString，给 UIKit 文本视图用。
     /// lineGap 是行间额外空隙，正文用它拉开呼吸感。
     private func nsAttributed(_ a: AttributedString, lineGap: CGFloat = 0) -> NSAttributedString {
-        let ns = (try? NSAttributedString(a, including: \.uiKit))
-            ?? NSAttributedString(string: String(a.characters))
+        // 兜底必须带上字号，否则 UITextView 会用默认 17pt，看起来比气泡小一号
+        let fallback = NSAttributedString(
+            string: String(a.characters),
+            attributes: [.font: UIFont.systemFont(ofSize: 18)]
+        )
+        let ns = (try? NSAttributedString(a, including: \.uiKit)) ?? fallback
         guard lineGap > 0 else { return ns }
         let m = NSMutableAttributedString(attributedString: ns)
         let style = NSMutableParagraphStyle()
