@@ -23,8 +23,18 @@ struct SelectableText: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: SelectableLabel, context: Context) {
-        if uiView.attributedText != attributed {
-            uiView.attributedText = attributed
+        // attributedText 自带的 UIFont 会覆盖 UITextView.font。逐段强制归一到
+        // 与用户气泡相同的 18pt，同时保留粗体/斜体/等宽等字形特征。
+        let normalized = NSMutableAttributedString(attributedString: attributed)
+        let full = NSRange(location: 0, length: normalized.length)
+        normalized.enumerateAttribute(.font, in: full) { value, range, _ in
+            let old = value as? UIFont
+            let descriptor = old?.fontDescriptor ?? UIFont.systemFont(ofSize: 18).fontDescriptor
+            let font = UIFont(descriptor: descriptor, size: 18)
+            normalized.addAttribute(.font, value: font, range: range)
+        }
+        if uiView.attributedText != normalized {
+            uiView.attributedText = normalized
         }
     }
 
