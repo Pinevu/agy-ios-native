@@ -15,6 +15,7 @@ struct AgyApp: App {
 
 struct RootView: View {
     @EnvironmentObject var state: AppState
+    @Environment(\.scenePhase) private var scenePhase
     @State private var loaded = false
 
     var body: some View {
@@ -33,6 +34,12 @@ struct RootView: View {
             loaded = true
             await state.bootstrap()
             state.startRunningPoller()
+        }
+        .onChange(of: scenePhase) { phase in
+            guard phase == .active else { return }
+            // iOS 从后台回来会冻结旧 SSE；立即重新拉运行态并恢复轮询，
+            // 不必再把 App 划掉重进才能看到正在执行的命令。
+            Task { await state.appBecameActive() }
         }
     }
 

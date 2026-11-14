@@ -45,12 +45,27 @@ final class AppState: ObservableObject {
     /// 任务运行中追加的提示词，等当前任务结束后自动发送
     @Published var pendingPrompts: [String: String] = [:]
 
-    /// 当前会话是否在跑
+    /// 当前会话是否在跑（仅本地订阅任务；恢复场景请用 isCurrentTaskRunning）
     var isRunning: Bool { currentRunningTask != nil }
     var runningTaskId: String? { currentRunningTask?.taskId }
     /// 全局在跑的任务数
     var runningCount: Int {
         max(running.count, serverRunning.count)
+    }
+
+    /// 当前页面是否对应服务端正在运行的任务（含新会话尚未落库的 draft）。
+    var currentServerTask: ServerRunning? {
+        let sid = activeSessionKey
+        let cid = currentSession?.conversationId ?? conversationId
+        return serverRunning[sid]
+            ?? serverRunning.values.first(where: { $0.conversationId != nil && $0.conversationId == cid })
+            ?? (currentSession.flatMap { s in serverRunning.values.first(where: { $0.taskId == s.latestTaskId }) })
+    }
+
+    /// 只要当前页面有本地或服务端任务在跑，就视为实时状态。
+    /// 这是给 UI 用的安全口径，避免 draft/正式会话 id 过渡时把流式消息误当静态。
+    var isCurrentTaskRunning: Bool {
+        currentRunningTask != nil || currentServerTask != nil
     }
 
     /// 合并后的运行中列表（本地优先，服务端补齐）
@@ -83,6 +98,13 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// App 回到前台：旧 SSE 在后台可能被 iOS 冻结，立刻重新对账而不是等下一轮计时器。
+    func appBecameActive() async {
+        guard isLoggedIn else { return }
+        await syncRunning()
+        startRunningPoller()
+    }
+
     func syncRunning() async {
         guard let snap = try? await api.runningTasks() else { return }
 
@@ -92,21 +114,20 @@ final class AppState: ObservableObject {
         }
         serverRunning = map
 
-        // 新建对话发出的任务，sessionId 先记的是 draft-xxx；
-        // 会话落库后按 conversation_id 反查真实 id 更正，否则「运行中」面板点不进去
-        for (tid, rt) in running where rt.sessionId.hasPrefix("draft-") {
-            let cid = rt.conversationId
-            if let s0 = sessions.first(where: { cid != nil && $0.conversationId == cid }) {
-                running[tid]?.sessionId = s0.id
-            }
+        // 新会话首个 meta 到达后可拿到 conversationId，但页面仍是 draft-*。
+        // 这里绝不把 draft 会话换成正式 id；等用户明确点开会话时才重绑定。
+        // 判断任务是否结束必须按 taskId，不可按 sessionId（服务端首次任务可能用 tid 作 sid）。
+        let serverTaskIds = Set(snap.running.map(\.taskId))
+        for tid in Array(running.keys) where !serverTaskIds.contains(tid) {
+            finish(taskId: tid)
         }
 
-        // 服务端说结束、本地还挂着的 → 收尾（finish 内部会补拉一次）
-        // draft- 开头的是新建对话还没落库的任务，服务端按真实 session 登记，
-        // 这里对不上 key，绝不能当成「已结束」收掉，否则任务还在跑就被停掉
-        for (tid, rt) in running
-            where !rt.sessionId.hasPrefix("draft-") && map[rt.sessionId] == nil {
-            finish(taskId: tid)
+        // App 被划掉再打开时没有本地 SSE 订阅：当前会话若仍在服务端运行，
+        // 通过 2 秒运行态轮询增量回放，不能让用户必须再杀一次 App 才看到新命令。
+        if let session = currentSession, currentServerTask != nil {
+            // 无论本地是否尚存 SSE task，都做轻量权威回放：
+            // iOS 在后台会冻结 URLSession.bytes，回来时 task 对象还在却已不再收事件。
+            await reconcileRemote(sessionId: session.id)
         }
 
         // 服务端刚刚结束、但本地根本没收到 end 的 → 直接补拉该会话
@@ -125,6 +146,8 @@ final class AppState: ObservableObject {
     private var reconnects: [String: Int] = [:]
     /// 每个任务已收到的事件数，重连时从这里续上
     private var received: [String: Int] = [:]
+    /// 远程运行任务的回放轮询节流：App 恢复/切进运行中会话但还没订阅 SSE 时使用
+    private var lastRemoteReconcile: [String: Date] = [:]
 
     /// 新会话（还没落库）用的临时 key，初值就有，保证任何时刻都有归属
     private var draftSessionKey = "draft-\(UUID().uuidString)"
@@ -140,12 +163,7 @@ final class AppState: ObservableObject {
             return local
         }
         // 本地没有但服务端在跑 → 兜底显示停止键。
-        // 按会话 id、conversationId、任务 id 三种都认，避免从灵动岛回来时 id 对不上导致键消失
-        let cid = currentSession?.conversationId
-        guard let sr = serverRunning[sid]
-            ?? serverRunning.values.first(where: { $0.conversationId == cid && cid != nil })
-            ?? serverRunning.values.first(where: { $0.taskId == sid })
-            else { return nil }
+        guard let sr = currentServerTask else { return nil }
         return RunningTask(taskId: sr.taskId,
                            sessionId: sid,
                            conversationId: sr.conversationId,
@@ -425,11 +443,34 @@ final class AppState: ObservableObject {
         conversationId = session.conversationId
         assistantIndex = nil
 
+        // 正式会话落库后，把仍在跑的 draft 任务显式重绑定到此会话。
+        // 不能在 syncRunning() 里偷偷改：它会让当前 draft 页丢掉实时 SSE 更新。
+        if let i = running.first(where: { _, rt in
+            rt.sessionId.hasPrefix("draft-") &&
+            rt.conversationId != nil && rt.conversationId == session.conversationId
+        })?.key {
+            running[i]?.sessionId = session.id
+            if let buf = taskBuffers[i] { sessionItems[session.id] = buf }
+        }
+
         // 后台正在跑这个会话 → 直接用它的实时缓冲
         if let rt = running.values.first(where: { $0.sessionId == session.id }),
            let buf = taskBuffers[rt.taskId], !buf.isEmpty {
             items = buf
             if let rtConv = rt.conversationId { conversationId = rtConv }
+            return
+        }
+
+        // App 重进后本地 running 是空的，但服务器可能仍在跑：
+        // 不等待下一次定时轮询，先回放旧事件，再把 SSE 从断点接回。
+        if let remote = currentServerTask {
+            loadingSession = session.id
+            items = []
+            defer { loadingSession = nil }
+            if let events = await reconcile(sessionId: session.id) {
+                adoptRemoteTask(remote, sessionId: session.id,
+                                receivedCount: replayedEventCount(events, taskId: remote.taskId))
+            }
             return
         }
         // 之前看过 → 用缓存
@@ -679,6 +720,7 @@ final class AppState: ObservableObject {
         reconnects.removeValue(forKey: taskId)
         received.removeValue(forKey: taskId)
         running.removeValue(forKey: taskId)
+        lastRemoteReconcile.removeValue(forKey: sid)
 
         // 有排队的追加提示词 → 自动发出
         if let queued = pendingPrompts[sid], !queued.isEmpty {
@@ -697,18 +739,67 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// 用服务端权威数据校正某个会话（SSE 断流、丢事件时自愈）
-    private func reconcile(sessionId sid: String) async {
-        guard let events = try? await api.replay(sid) else { return }
+    /// 用服务端权威数据校正某个会话（SSE 断流、丢事件时自愈）。
+    /// 返回原始事件，以便恢复时精确算出该任务 SSE 已消费到的位置。
+    @discardableResult
+    private func reconcile(sessionId sid: String) async -> [ChatEvent]? {
+        guard let events = try? await api.replay(sid) else { return nil }
         let snapshot = buildItems(events)
         sessionItems[sid] = snapshot
         if activeSessionKey == sid {
-            // 只有内容确实变多/变完整时才替换，避免无谓闪烁
-            if snapshot.count >= items.count {
-                items = snapshot
+            // count 相同不代表内容相同：工具 running→done、同一助手文本增量都会保持条目数。
+            // 每次都用服务端权威快照覆盖，才能让划掉 App 后仍在跑的任务继续更新。
+            items = snapshot
+            if let i = items.indices.last, case .assistant = items[i].kind {
+                assistantIndex = i
+            } else {
                 assistantIndex = nil
             }
+            streamTick &+= 1
         }
+        return events
+    }
+
+    /// 回放是按「user_input + 该 task 的原始事件」拼起来的；计算该 task 已落盘的事件数，
+    /// 重新订阅 SSE 时从这个位置继续，不重放也不漏掉已显示的工具调用。
+    private func replayedEventCount(_ events: [ChatEvent], taskId: String) -> Int {
+        var inTask = false
+        var count = 0
+        for event in events {
+            if event.type == "user_input" {
+                if inTask { break }
+                inTask = event.taskId == taskId
+                continue
+            }
+            if inTask { count += 1 }
+        }
+        return count
+    }
+
+    /// 把服务端已有、但本地因杀 App/后台冻结而失去订阅的任务重新接回 SSE。
+    private func adoptRemoteTask(_ remote: ServerRunning, sessionId sid: String, receivedCount: Int) {
+        guard running[remote.taskId] == nil else { return }
+        running[remote.taskId] = RunningTask(taskId: remote.taskId,
+                                             sessionId: sid,
+                                             conversationId: remote.conversationId,
+                                             title: remote.title ?? "",
+                                             startedAt: Date().addingTimeInterval(-Double(remote.elapsed ?? 0)))
+        taskBuffers[remote.taskId] = items
+        received[remote.taskId] = receivedCount
+        reconnects.removeValue(forKey: remote.taskId)
+        listen(taskId: remote.taskId)
+    }
+
+    /// App 重进/切换到运行中会话时：先以回放补齐，再恢复 SSE 实时订阅；轮询只是断流保险。
+    private func reconcileRemote(sessionId sid: String) async {
+        let now = Date()
+        if let last = lastRemoteReconcile[sid], now.timeIntervalSince(last) < 1.5 { return }
+        lastRemoteReconcile[sid] = now
+        guard let events = await reconcile(sessionId: sid),
+              currentSession?.id == sid,
+              let remote = currentServerTask else { return }
+        adoptRemoteTask(remote, sessionId: sid,
+                        receivedCount: replayedEventCount(events, taskId: remote.taskId))
     }
 
     /// 当前会话标题（灵动岛用）
@@ -942,6 +1033,10 @@ final class AppState: ObservableObject {
         default:
             break
         }
+
+        // 所有非文本事件（工具开始/结束、思考、用量、错误）也必须触发贴底。
+        // 之前只有 text 会加 streamTick，所以「最新执行命令」会在屏幕外堆着。
+        streamTick &+= 1
 
         // 关键：当前会话的改动也要回写任务缓冲，finish() 才不会拿旧副本覆盖
         taskBuffers[taskId] = items

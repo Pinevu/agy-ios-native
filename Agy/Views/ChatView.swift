@@ -333,7 +333,7 @@ struct ChatView: View {
                     Color.clear
                         .frame(height: 1)
                         .id("bottom-sentinel")
-                    if state.isRunning {
+                    if state.isCurrentTaskRunning {
                         HStack(spacing: 7) {
                             ProgressView().scaleEffect(0.7)
                             Text(state.items.isEmpty ? "正在准备…" : "正在思考与执行…")
@@ -372,18 +372,26 @@ struct ChatView: View {
             .onPreferenceChange(ScrollOffsetKey.self) { off in
                 contentOffset = off
                 lastOffset = off
-                // 只有手指在拖时，偏移变化才代表用户意图；
-                // 程序自己贴底滚动、内容变高都不该改变跟随状态
-                if userDragging { updateBackButton() }
+                // 不在 onChanged 期间判定：流式内容正长高时手指轻碰屏幕，
+                // 偏移会被系统和内容布局同时改写，容易误关贴底。
             }
             .simultaneousGesture(
-                DragGesture(minimumDistance: 6)
+                DragGesture(minimumDistance: 10)
                     .onChanged { _ in
                         if !userDragging { userDragging = true }
                     }
-                    .onEnded { _ in
+                    .onEnded { value in
                         userDragging = false
-                        updateBackButton()
+                        // 只有明确向上拖超过一小段，才认为用户要离开底部；
+                        // 轻触、横滑、键盘交互都不应停止流式跟随。
+                        let vertical = value.translation.height
+                        if vertical < -24 {
+                            showBackToBottom = true
+                            stickBottom = false
+                        } else if vertical > 24, distanceFromBottom < 80 {
+                            showBackToBottom = false
+                            stickBottom = true
+                        }
                     }
             )
             .onPreferenceChange(ContentHeightKey.self) { h in
@@ -394,11 +402,14 @@ struct ChatView: View {
                 // 内容变高（图片/公式陆续布局完）→ 贴底跟随，但节流，避免滚动死循环
                 guard stickBottom else { return }
                 let now = Date()
-                // 任务运行中跟紧一点（120ms），空闲时放宽（350ms）避免滚动死循环
-                let gap = state.isRunning ? 0.12 : 0.35
+                // 正在跑时不节流：工具卡/文本增长必须逐次贴底，不能积在屏幕外。
+                // 空闲的异步图片/公式布局才限速，避免无意义的反复滚动。
+                let gap = state.isCurrentTaskRunning ? 0.0 : 0.35
                 guard now.timeIntervalSince(lastAutoScroll) > gap else { return }
                 lastAutoScroll = now
-                withAnimation(nil) { proxy.scrollTo("bottom-sentinel", anchor: .bottom) }
+                DispatchQueue.main.async {
+                    withAnimation(nil) { proxy.scrollTo("bottom-sentinel", anchor: .bottom) }
+                }
             }
             .id(state.currentSession?.id ?? "draft")
             .scrollDismissesKeyboard(.interactively)
@@ -416,9 +427,11 @@ struct ChatView: View {
                     .padding(.bottom, 10)
                     .animation(.easeOut(duration: 0.18), value: showBackToBottom)
             }
-            .onChange(of: state.isRunning) { running in
+            .onChange(of: state.isCurrentTaskRunning) { running in
                 if running {
-                    withAnimation { proxy.scrollTo("running", anchor: .bottom) }
+                    DispatchQueue.main.async {
+                        withAnimation(nil) { proxy.scrollTo("bottom-sentinel", anchor: .bottom) }
+                    }
                     turnCursor = -1
                 } else if stickBottom {
                     // 结束时「正在思考」行被移除，内容变矮，滚动位置不变就会悬在空白区
@@ -426,9 +439,12 @@ struct ChatView: View {
                 }
             }
             .onChange(of: state.streamTick) { _ in
-                // 流式文字在既有行里增长，内容总高度不一定变，这里直接跟随
+                // 文本、工具开始、工具结束、回放补齐都统一增加 streamTick。
+                // 延迟到本轮视图布局后再定位，避免滚到上一帧哨兵而留下整页空白。
                 guard stickBottom else { return }
-                withAnimation(nil) { proxy.scrollTo("bottom-sentinel", anchor: .bottom) }
+                DispatchQueue.main.async {
+                    withAnimation(nil) { proxy.scrollTo("bottom-sentinel", anchor: .bottom) }
+                }
             }
             .onChange(of: state.currentSession?.id) { _ in
                 turnCursor = -1
@@ -476,8 +492,9 @@ struct ChatView: View {
 
     /// 单行独立成函数，避免 messageList 的表达式大到编译器算不出来
     private func messageRow(_ item: ChatItem) -> some View {
-        // 最后一条且在运行中 = 正在流式写入
-        let live = state.isRunning && state.items.last?.id == item.id
+        // 本地 SSE 或 App 恢复后服务端仍在跑，最后一行都按 live 渲染。
+        // 否则重进 App 后会把新工具/文本当成静态行，状态难以持续刷新。
+        let live = state.isCurrentTaskRunning && state.items.last?.id == item.id
         return MessageRow(item: item, isLive: live, actions: MessageActions(
             edit: { openEditor(for: $0) },
             retry: { it in
@@ -774,14 +791,14 @@ struct ChatView: View {
                 Button {
                     let empty = state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                         && state.attachments.isEmpty
-                    if empty && !state.isRunning {
+                    if empty && !state.isCurrentTaskRunning {
                         // 空内容点发送 → 聚焦输入框，而不是一个点了没反应的灰按钮
                         inputFocused = true
                         return
                     }
                     inputFocused = false
                     Task {
-                        if state.isRunning && empty {
+                        if state.isCurrentTaskRunning && empty {
                             // 空输入 + 运行中 = 停止
                             await state.stop()
                         } else if let editing = editingItem {
@@ -797,7 +814,7 @@ struct ChatView: View {
                         }
                     }
                 } label: {
-                    Image(systemName: isQueueMode ? "arrow.up.to.line" : (state.isRunning ? "stop.fill" : "arrow.up"))
+                    Image(systemName: isQueueMode ? "arrow.up.to.line" : (state.isCurrentTaskRunning ? "stop.fill" : "arrow.up"))
                         .font(.system(size: 15, weight: .bold))
                         .foregroundStyle(.white)
                         .frame(width: 34, height: 34)
@@ -828,13 +845,13 @@ struct ChatView: View {
 
     /// 运行中且有内容 = 排队追加；运行中且空 = 停止
     private var isQueueMode: Bool {
-        state.isRunning &&
+        state.isCurrentTaskRunning &&
         (!state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !state.attachments.isEmpty)
     }
 
     private var buttonColor: Color {
         if isQueueMode { return Color.accentColor }
-        if state.isRunning { return .red }
+        if state.isCurrentTaskRunning { return .red }
         let empty = state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && state.attachments.isEmpty
         return empty ? Color(.systemGray3) : Color.accentColor
     }
