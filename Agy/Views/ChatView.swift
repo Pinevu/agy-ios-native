@@ -41,8 +41,14 @@ struct ChatView: View {
     @State private var lastAutoScroll = Date.distantPast
     /// 内容顶部相对滚动视口的偏移（负值 = 已向上滚）
     @State private var contentOffset: CGFloat = 0
+    /// 上一次的偏移，用来判断是不是用户真的在滚
+    @State private var lastOffset: CGFloat = 0
+    /// 上一次的内容高度
+    @State private var lastHeight: CGFloat = 0
     /// 滚动视口高度
     @State private var viewportHeight: CGFloat = 1
+    /// 手指是否正按在列表上拖动：只有这时才认为滚动是用户意图
+    @State private var userDragging = false
     @State private var turnCursor: Int = -1
     @State private var showModelPicker = false
     @State private var showQuota = false
@@ -365,12 +371,26 @@ struct ChatView: View {
             .onAppear { viewportHeight = max(outer.size.height, 1) }
             .onPreferenceChange(ScrollOffsetKey.self) { off in
                 contentOffset = off
-                updateBackButton()
+                lastOffset = off
+                // 只有手指在拖时，偏移变化才代表用户意图；
+                // 程序自己贴底滚动、内容变高都不该改变跟随状态
+                if userDragging { updateBackButton() }
             }
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 6)
+                    .onChanged { _ in
+                        if !userDragging { userDragging = true }
+                    }
+                    .onEnded { _ in
+                        userDragging = false
+                        updateBackButton()
+                    }
+            )
             .onPreferenceChange(ContentHeightKey.self) { h in
                 guard abs(h - contentHeight) > 1 else { return }
                 contentHeight = h
-                updateBackButton()
+                lastHeight = h
+                recoverIfFellBehind(proxy)
                 // 内容变高（图片/公式陆续布局完）→ 贴底跟随，但节流，避免滚动死循环
                 guard stickBottom else { return }
                 let now = Date()
@@ -426,18 +446,30 @@ struct ChatView: View {
         }
     }
 
-    /// 按钮显隐：距底超过 120 才出现，回到底部 40 以内才消失（滞回，避免流式时闪）
+    /// 距底多少（内容总高 + 顶部偏移 - 视口高）
+    private var distanceFromBottom: CGFloat {
+        contentHeight + contentOffset - viewportHeight
+    }
+
+    /// 按钮显隐。只在用户真的手动滚动时调用，
+    /// 避免流式输出导致内容变高时被误判成「用户离开了底部」而停止跟随。
     private func updateBackButton() {
-        // 首帧视口还没量到，不判定，避免一进会话就冒出按钮
         guard viewportHeight > 50, contentHeight > 1 else { return }
-        let distance = contentHeight + contentOffset - viewportHeight
-        if !showBackToBottom, distance > 120 {
+        let d = distanceFromBottom
+        if !showBackToBottom, d > 120 {
             withAnimation(.easeOut(duration: 0.18)) { showBackToBottom = true }
             stickBottom = false
-        } else if showBackToBottom, distance < 40 {
+        } else if showBackToBottom, d < 40 {
             withAnimation(.easeOut(duration: 0.18)) { showBackToBottom = false }
             stickBottom = true
         }
+    }
+
+    /// 内容变高后的兜底：应当贴底却掉队太远，就把跟随拉回来（只纠正，不改用户意图）
+    private func recoverIfFellBehind(_ proxy: ScrollViewProxy) {
+        guard stickBottom, viewportHeight > 50, contentHeight > 1 else { return }
+        guard distanceFromBottom > 200 else { return }
+        withAnimation(nil) { proxy.scrollTo("bottom-sentinel", anchor: .bottom) }
     }
 
 
