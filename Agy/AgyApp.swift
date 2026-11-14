@@ -35,8 +35,9 @@ struct RootView: View {
             await state.bootstrap()
             state.startRunningPoller()
         }
+        // 避免启动首帧的 active 回调和 bootstrap 并发，把刚建好的轮询/流又重复重接一遍。
         .onChange(of: scenePhase) { phase in
-            guard phase == .active else { return }
+            guard phase == .active, loaded, state.isLoggedIn else { return }
             // iOS 从后台回来会冻结旧 SSE；立即重新拉运行态并恢复轮询，
             // 不必再把 App 划掉重进才能看到正在执行的命令。
             Task { await state.appBecameActive() }

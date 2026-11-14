@@ -39,6 +39,8 @@ struct ChatView: View {
     /// 内容总高度（用于侦测高度变化）
     @State private var contentHeight: CGFloat = 0
     @State private var lastAutoScroll = Date.distantPast
+    /// 上一次因 streamTick 发起的自动贴底；合并密集工具/文本事件，避免 ScrollView 连续闪动。
+    @State private var lastStreamScroll = Date.distantPast
     /// 内容顶部相对滚动视口的偏移（负值 = 已向上滚）
     @State private var contentOffset: CGFloat = 0
     /// 上一次的偏移，用来判断是不是用户真的在滚
@@ -49,6 +51,8 @@ struct ChatView: View {
     @State private var viewportHeight: CGFloat = 1
     /// 手指是否正按在列表上拖动：只有这时才认为滚动是用户意图
     @State private var userDragging = false
+    /// 键盘改变安全区时 ScrollView 的高度会连跳数次；这段窗口禁止强制滚动，避免白屏闪烁。
+    @State private var keyboardTransitionUntil = Date.distantPast
     @State private var turnCursor: Int = -1
     @State private var showModelPicker = false
     @State private var showQuota = false
@@ -366,6 +370,11 @@ struct ChatView: View {
             .modifier(BottomAnchorModifier())
             .coordinateSpace(name: "chatScroll")
             .onChange(of: outer.size.height) { h in
+                // 键盘弹出/收起会连续改变可视区高度；此前每一次都触发内容高度回调 + scrollTo，
+                // ScrollViewReader 会短暂找不到哨兵，看上去像整页白掉。
+                if abs(h - viewportHeight) > 40 {
+                    keyboardTransitionUntil = Date().addingTimeInterval(0.38)
+                }
                 if h > 1 { viewportHeight = h }
             }
             .onAppear { viewportHeight = max(outer.size.height, 1) }
@@ -398,16 +407,20 @@ struct ChatView: View {
                 guard abs(h - contentHeight) > 1 else { return }
                 contentHeight = h
                 lastHeight = h
+                // 键盘动画尚未稳定时不要 scrollTo；等下一条流事件或动画结束再定位。
+                guard Date() >= keyboardTransitionUntil else { return }
                 recoverIfFellBehind(proxy)
                 // 内容变高（图片/公式陆续布局完）→ 贴底跟随，但节流，避免滚动死循环
                 guard stickBottom else { return }
                 let now = Date()
-                // 正在跑时不节流：工具卡/文本增长必须逐次贴底，不能积在屏幕外。
-                // 空闲的异步图片/公式布局才限速，避免无意义的反复滚动。
-                let gap = state.isCurrentTaskRunning ? 0.0 : 0.35
+                // 正在跑时适度合并高度变化：工具/文字每次都滚会触发整个 LazyVStack
+                // 的连续 layout transaction，长任务就表现为屏幕闪。文本事件的 streamTick
+                // 已负责贴底，内容高度这里只兜图片/公式等异步布局。
+                let gap = state.isCurrentTaskRunning ? 0.10 : 0.35
                 guard now.timeIntervalSince(lastAutoScroll) > gap else { return }
                 lastAutoScroll = now
                 DispatchQueue.main.async {
+                    guard Date() >= keyboardTransitionUntil else { return }
                     withAnimation(nil) { proxy.scrollTo("bottom-sentinel", anchor: .bottom) }
                 }
             }
@@ -440,9 +453,13 @@ struct ChatView: View {
             }
             .onChange(of: state.streamTick) { _ in
                 // 文本、工具开始、工具结束、回放补齐都统一增加 streamTick。
-                // 延迟到本轮视图布局后再定位，避免滚到上一帧哨兵而留下整页空白。
-                guard stickBottom else { return }
+                // 合并 80ms 内的多次变更，避免长任务连续 scrollTo 引发画面闪动。
+                guard stickBottom, Date() >= keyboardTransitionUntil else { return }
+                let now = Date()
+                guard now.timeIntervalSince(lastStreamScroll) > 0.08 else { return }
+                lastStreamScroll = now
                 DispatchQueue.main.async {
+                    guard Date() >= keyboardTransitionUntil else { return }
                     withAnimation(nil) { proxy.scrollTo("bottom-sentinel", anchor: .bottom) }
                 }
             }
@@ -520,8 +537,14 @@ struct ChatView: View {
         let delays = immediate ? [0.02] : [0.02, 0.12, 0.3, 0.7]
         for delay in delays {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                withAnimation(nil) {
-                    proxy.scrollTo("bottom-sentinel", anchor: .bottom)
+                // 会话切换仍允许强制贴底；仅键盘安全区正在动画时延后，避免白屏。
+                let remaining = keyboardTransitionUntil.timeIntervalSinceNow
+                if remaining > 0 {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + remaining + 0.03) {
+                        withAnimation(nil) { proxy.scrollTo("bottom-sentinel", anchor: .bottom) }
+                    }
+                } else {
+                    withAnimation(nil) { proxy.scrollTo("bottom-sentinel", anchor: .bottom) }
                 }
             }
         }

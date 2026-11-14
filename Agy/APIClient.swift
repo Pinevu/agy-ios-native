@@ -272,6 +272,7 @@ class APIClient {
     /// 订阅任务事件流，逐条回调。自动处理 meta/init/text/tool/usage/end。
     func stream(taskId: String,
                 from: Int = 0,
+                onActivity: @escaping () -> Void = {},
                 onEvent: @escaping (ChatEvent) -> Void,
                 onClose: @escaping () -> Void) -> Task<Void, Never>? {
         guard var comp = URLComponents(url: baseURL.appendingPathComponent("api/stream/\(taskId)"), resolvingAgainstBaseURL: false) else { return nil }
@@ -295,6 +296,8 @@ class APIClient {
                 }
                 for try await line in bytes.lines {
                     if Task.isCancelled { break }
+                    // data 事件和服务端 : ping 都说明这条连接还活着。
+                    onActivity()
                     guard line.hasPrefix("data:") else { continue }
                     let json = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
                     guard let data = json.data(using: .utf8) else { continue }

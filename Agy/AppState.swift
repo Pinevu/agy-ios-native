@@ -98,21 +98,26 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// App 回到前台：旧 SSE 在后台可能被 iOS 冻结，立刻重新对账而不是等下一轮计时器。
+    /// App 回到前台：iOS 可能保留一个已冻结的 URLSession task，
+    /// 所以强制做一次「回放补齐 → 断点重接」，之后仍回到纯 SSE 模式。
     func appBecameActive() async {
         guard isLoggedIn else { return }
-        await syncRunning()
+        await syncRunning(forceCurrentRecovery: true)
         startRunningPoller()
     }
 
-    func syncRunning() async {
+    func syncRunning(forceCurrentRecovery: Bool = false) async {
         guard let snap = try? await api.runningTasks() else { return }
 
         var map: [String: ServerRunning] = [:]
         for r in snap.running {
             map[r.sessionId ?? r.taskId] = r
         }
-        serverRunning = map
+        // /api/running 的 elapsed 每 2 秒都会变；不应因此发布一个新字典，
+        // 否则整个 ChatView 会在长任务中无意义重算，放大滚动闪动。
+        if !sameRunningMap(serverRunning, map) {
+            serverRunning = map
+        }
 
         // 新会话首个 meta 到达后可拿到 conversationId，但页面仍是 draft-*。
         // 这里绝不把 draft 会话换成正式 id；等用户明确点开会话时才重绑定。
@@ -122,12 +127,15 @@ final class AppState: ObservableObject {
             finish(taskId: tid)
         }
 
-        // App 被划掉再打开时没有本地 SSE 订阅：当前会话若仍在服务端运行，
-        // 通过 2 秒运行态轮询增量回放，不能让用户必须再杀一次 App 才看到新命令。
-        if let session = currentSession, currentServerTask != nil {
-            // 无论本地是否尚存 SSE task，都做轻量权威回放：
-            // iOS 在后台会冻结 URLSession.bytes，回来时 task 对象还在却已不再收事件。
-            await reconcileRemote(sessionId: session.id)
+        // 正常运行只信 SSE，绝不每 2 秒整页回放（那会让长任务的列表闪动）。
+        // 只有本地没有订阅，或超过 18 秒没收到 data/ping，才认为连接失联并做一次恢复。
+        if let session = currentSession, let remote = currentServerTask {
+            let local = running[remote.taskId]
+            let last = lastStreamActivity[remote.taskId] ?? .distantPast
+            let stale = Date().timeIntervalSince(last) > 18
+            if forceCurrentRecovery || local == nil || stale {
+                await reconcileRemote(sessionId: session.id, force: forceCurrentRecovery)
+            }
         }
 
         // 服务端刚刚结束、但本地根本没收到 end 的 → 直接补拉该会话
@@ -140,14 +148,33 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// 运行任务有无实际变化（刻意忽略 elapsed，它只是计时显示，不值得让整个视图重算）。
+    private func sameRunningMap(_ a: [String: ServerRunning], _ b: [String: ServerRunning]) -> Bool {
+        guard a.count == b.count else { return false }
+        for (key, x) in a {
+            guard let y = b[key],
+                  x.taskId == y.taskId,
+                  x.sessionId == y.sessionId,
+                  x.conversationId == y.conversationId,
+                  x.title == y.title else { return false }
+        }
+        return true
+    }
+
     /// 防止同一会话反复补拉
     private var lastReconciled: [String: Date] = [:]
     /// 每个任务的断流重连次数（退避用）
     private var reconnects: [String: Int] = [:]
     /// 每个任务已收到的事件数，重连时从这里续上
     private var received: [String: Int] = [:]
+    /// 该任务上一次收到 SSE data 或 ping 的时间；后台冻结时 ping 也会停，用它精确判断失联。
+    private var lastStreamActivity: [String: Date] = [:]
+    /// 每次重连都会换代；旧 SSE 的延迟 onClose/onEvent 不能碰新连接，避免双订阅和重复回放。
+    private var streamEpoch: [String: Int] = [:]
     /// 远程运行任务的回放轮询节流：App 恢复/切进运行中会话但还没订阅 SSE 时使用
     private var lastRemoteReconcile: [String: Date] = [:]
+    /// 回放网络请求期间去重，防止前后台恢复与 2 秒轮询同时重建整页。
+    private var remoteRecoveryInFlight: Set<String> = []
 
     /// 新会话（还没落库）用的临时 key，初值就有，保证任何时刻都有归属
     private var draftSessionKey = "draft-\(UUID().uuidString)"
@@ -652,17 +679,29 @@ final class AppState: ObservableObject {
     }
 
     private func listen(taskId: String) {
-        // 从已收到的位置续上，重连不重放
+        // 从已收到的位置续上，重连不重放。每条新连接有独立代次，旧连接迟到的回调一律丢弃。
         let from = received[taskId] ?? 0
-        let task = api.stream(taskId: taskId, from: from, onEvent: { [weak self] ev in
+        let epoch = (streamEpoch[taskId] ?? 0) + 1
+        streamEpoch[taskId] = epoch
+        lastStreamActivity[taskId] = Date()
+        let task = api.stream(taskId: taskId, from: from, onActivity: { [weak self] in
             Task { @MainActor in
+                guard self?.streamEpoch[taskId] == epoch else { return }
+                self?.lastStreamActivity[taskId] = Date()
+            }
+        }, onEvent: { [weak self] ev in
+            Task { @MainActor in
+                guard self?.streamEpoch[taskId] == epoch else { return }
                 self?.received[taskId, default: 0] += 1
                 self?.handle(ev, taskId: taskId)
             }
         }, onClose: { [weak self] in
             // 连接断了不等于任务结束：代理/网络会掐掉长时间无数据的 SSE。
             // 先问服务端，还在跑就重连，确认结束才收尾。
-            Task { @MainActor in await self?.streamClosed(taskId: taskId) }
+            Task { @MainActor in
+                guard self?.streamEpoch[taskId] == epoch else { return }
+                await self?.streamClosed(taskId: taskId)
+            }
         })
         running[taskId]?.stream = task
     }
@@ -719,6 +758,8 @@ final class AppState: ObservableObject {
         taskBuffers.removeValue(forKey: taskId)
         reconnects.removeValue(forKey: taskId)
         received.removeValue(forKey: taskId)
+        lastStreamActivity.removeValue(forKey: taskId)
+        streamEpoch.removeValue(forKey: taskId)
         running.removeValue(forKey: taskId)
         lastRemoteReconcile.removeValue(forKey: sid)
 
@@ -777,8 +818,9 @@ final class AppState: ObservableObject {
     }
 
     /// 把服务端已有、但本地因杀 App/后台冻结而失去订阅的任务重新接回 SSE。
-    private func adoptRemoteTask(_ remote: ServerRunning, sessionId sid: String, receivedCount: Int) {
-        guard running[remote.taskId] == nil else { return }
+    private func adoptRemoteTask(_ remote: ServerRunning, sessionId sid: String,
+                                 receivedCount: Int, replacing: Bool = false) {
+        if running[remote.taskId] != nil, !replacing { return }
         running[remote.taskId] = RunningTask(taskId: remote.taskId,
                                              sessionId: sid,
                                              conversationId: remote.conversationId,
@@ -791,15 +833,23 @@ final class AppState: ObservableObject {
     }
 
     /// App 重进/切换到运行中会话时：先以回放补齐，再恢复 SSE 实时订阅；轮询只是断流保险。
-    private func reconcileRemote(sessionId sid: String) async {
+    private func reconcileRemote(sessionId sid: String, force: Bool = false) async {
         let now = Date()
-        if let last = lastRemoteReconcile[sid], now.timeIntervalSince(last) < 1.5 { return }
+        if !force, let last = lastRemoteReconcile[sid], now.timeIntervalSince(last) < 1.5 { return }
+        guard !remoteRecoveryInFlight.contains(sid) else { return }
         lastRemoteReconcile[sid] = now
+        remoteRecoveryInFlight.insert(sid)
+        defer { remoteRecoveryInFlight.remove(sid) }
+
         guard let events = await reconcile(sessionId: sid),
               currentSession?.id == sid,
               let remote = currentServerTask else { return }
+
+        // 本地订阅仍存在但超过阈值无任何 ping，主动撤掉它；否则会留下两条流。
+        running[remote.taskId]?.stream?.cancel()
         adoptRemoteTask(remote, sessionId: sid,
-                        receivedCount: replayedEventCount(events, taskId: remote.taskId))
+                        receivedCount: replayedEventCount(events, taskId: remote.taskId),
+                        replacing: true)
     }
 
     /// 当前会话标题（灵动岛用）
