@@ -14,6 +14,13 @@ struct BottomAnchorModifier: ViewModifier {
     }
 }
 
+struct ScrollOffsetKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 struct ContentHeightKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
@@ -32,6 +39,10 @@ struct ChatView: View {
     /// 内容总高度（用于侦测高度变化）
     @State private var contentHeight: CGFloat = 0
     @State private var lastAutoScroll = Date.distantPast
+    /// 内容顶部相对滚动视口的偏移（负值 = 已向上滚）
+    @State private var contentOffset: CGFloat = 0
+    /// 滚动视口高度
+    @State private var viewportHeight: CGFloat = 1
     @State private var turnCursor: Int = -1
     @State private var showModelPicker = false
     @State private var showQuota = false
@@ -299,7 +310,8 @@ struct ChatView: View {
     // MARK: - 消息列表
 
     private var messageList: some View {
-        ScrollViewReader { proxy in
+        GeometryReader { outer in
+            ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
                     if state.items.isEmpty {
@@ -315,14 +327,6 @@ struct ChatView: View {
                     Color.clear
                         .frame(height: 1)
                         .id("bottom-sentinel")
-                        .onAppear {
-                            if showBackToBottom { withAnimation { showBackToBottom = false } }
-                            stickBottom = true
-                        }
-                        .onDisappear {
-                            if !showBackToBottom { showBackToBottom = true }
-                            stickBottom = false
-                        }
                     if state.isRunning {
                         HStack(spacing: 7) {
                             ProgressView().scaleEffect(0.7)
@@ -345,12 +349,27 @@ struct ChatView: View {
                                                value: g.size.height)
                     }
                 )
+                // 内容在滚动坐标系里的位置，配合视口高度算出距底距离
+                .background(
+                    GeometryReader { g in
+                        Color.clear.preference(key: ScrollOffsetKey.self,
+                                               value: g.frame(in: .named("chatScroll")).minY)
+                    }
+                )
             }
             .modifier(BottomAnchorModifier())
             .coordinateSpace(name: "chatScroll")
+            .onChange(of: outer.size.height) { h in
+                if h > 1 { viewportHeight = h }
+            }
+            .onPreferenceChange(ScrollOffsetKey.self) { off in
+                contentOffset = off
+                updateBackButton()
+            }
             .onPreferenceChange(ContentHeightKey.self) { h in
                 guard abs(h - contentHeight) > 1 else { return }
                 contentHeight = h
+                updateBackButton()
                 // 内容变高（图片/公式陆续布局完）→ 贴底跟随，但节流，避免滚动死循环
                 guard stickBottom else { return }
                 let now = Date()
@@ -402,6 +421,22 @@ struct ChatView: View {
                 forceScrollToBottom(proxy)
             }
 
+            }
+        }
+        .onAppear { viewportHeight = max(outer.size.height, 1) }
+    }
+
+    /// 按钮显隐：距底超过 120 才出现，回到底部 40 以内才消失（滞回，避免流式时闪）
+    private func updateBackButton() {
+        // 首帧视口还没量到，不判定，避免一进会话就冒出按钮
+        guard viewportHeight > 50, contentHeight > 1 else { return }
+        let distance = contentHeight + contentOffset - viewportHeight
+        if !showBackToBottom, distance > 120 {
+            withAnimation(.easeOut(duration: 0.18)) { showBackToBottom = true }
+            stickBottom = false
+        } else if showBackToBottom, distance < 40 {
+            withAnimation(.easeOut(duration: 0.18)) { showBackToBottom = false }
+            stickBottom = true
         }
     }
 
@@ -475,7 +510,8 @@ struct ChatView: View {
                 Button {
                     turnCursor = -1
                     stickBottom = true
-                    showBackToBottom = false
+                    // 不在这里手动隐藏：交给距离测量，滚到底后自己消失，
+                    // 否则按钮先消失、滚动还没完成，途中又被判定为「离底部很远」重新冒出
                     forceScrollToBottom(proxy)
                 } label: {
                     fabIcon("arrow.down.to.line")
