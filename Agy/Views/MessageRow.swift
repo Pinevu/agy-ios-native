@@ -87,6 +87,7 @@ struct MessageRow: View {
             Text(text)
                 .font(.system(size: 12.5))
                 .foregroundStyle(.tertiary)
+                .fontWeight(.medium)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.top, 8)

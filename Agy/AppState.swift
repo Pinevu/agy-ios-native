@@ -712,6 +712,23 @@ final class AppState: ObservableObject {
 
     /// 一句短说明：不换行、不超过 30 字、不是列表或标题。
     /// 用来把「工具前的那句中文」从正文里挑出来单独渲染。
+    /// 工具前那句说明：末尾可能隔着 usage 用量行，要往前跳过它再判断
+    private func noteIndex(in arr: [ChatItem]) -> Int? {
+        var i = arr.count - 1
+        while i >= 0 {
+            switch arr[i].kind {
+            case .usage:
+                i -= 1
+                continue
+            case .assistant(let t):
+                return isNote(t) ? i : nil
+            default:
+                return nil
+            }
+        }
+        return nil
+    }
+
     private func isNote(_ t: String) -> Bool {
         let s = t.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !s.isEmpty, s.count <= 30, !s.contains("\n") else { return false }
@@ -786,7 +803,7 @@ final class AppState: ObservableObject {
                 }
             }
         case "tool":
-            if let i = buf.indices.last, case .assistant(let t) = buf[i].kind, isNote(t) {
+            if let i = noteIndex(in: buf), case .assistant(let t) = buf[i].kind {
                 buf[i].kind = .note(text: t.trimmingCharacters(in: .whitespacesAndNewlines))
             }
             if let n = ev.name { buf.append(ChatItem(kind: .tool(name: n, input: ev.text ?? "", output: nil, seconds: nil, running: true))) }
@@ -863,7 +880,7 @@ final class AppState: ObservableObject {
         case "tool":
             // 工具前那句短说明从正文里剥离，单独渲染
             flushText(taskId: taskId)
-            if let i = items.indices.last, case .assistant(let t) = items[i].kind, isNote(t) {
+            if let i = noteIndex(in: items), case .assistant(let t) = items[i].kind {
                 items[i].kind = .note(text: t.trimmingCharacters(in: .whitespacesAndNewlines))
             }
             assistantIndex = nil
@@ -983,7 +1000,7 @@ final class AppState: ObservableObject {
                 appendAssistant(t)
 
             case "tool":
-                if let i = out.indices.last, case .assistant(let t) = out[i].kind, isNote(t) {
+                if let i = noteIndex(in: out), case .assistant(let t) = out[i].kind {
                     out[i].kind = .note(text: t.trimmingCharacters(in: .whitespacesAndNewlines))
                 }
                 assistant = nil
