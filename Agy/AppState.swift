@@ -121,6 +121,8 @@ final class AppState: ObservableObject {
     private var lastReconciled: [String: Date] = [:]
     /// 每个任务的断流重连次数（退避用）
     private var reconnects: [String: Int] = [:]
+    /// 每个任务已收到的事件数，重连时从这里续上
+    private var received: [String: Int] = [:]
 
     /// 新会话（还没落库）用的临时 key，初值就有，保证任何时刻都有归属
     private var draftSessionKey = "draft-\(UUID().uuidString)"
@@ -600,8 +602,13 @@ final class AppState: ObservableObject {
     }
 
     private func listen(taskId: String) {
-        let task = api.stream(taskId: taskId, onEvent: { [weak self] ev in
-            Task { @MainActor in self?.handle(ev, taskId: taskId) }
+        // 从已收到的位置续上，重连不重放
+        let from = received[taskId] ?? 0
+        let task = api.stream(taskId: taskId, from: from, onEvent: { [weak self] ev in
+            Task { @MainActor in
+                self?.received[taskId, default: 0] += 1
+                self?.handle(ev, taskId: taskId)
+            }
         }, onClose: { [weak self] in
             // 连接断了不等于任务结束：代理/网络会掐掉长时间无数据的 SSE。
             // 先问服务端，还在跑就重连，确认结束才收尾。
@@ -661,6 +668,7 @@ final class AppState: ObservableObject {
         }
         taskBuffers.removeValue(forKey: taskId)
         reconnects.removeValue(forKey: taskId)
+        received.removeValue(forKey: taskId)
         running.removeValue(forKey: taskId)
 
         // 有排队的追加提示词 → 自动发出

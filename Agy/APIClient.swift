@@ -265,14 +265,22 @@ class APIClient {
 
     /// 订阅任务事件流，逐条回调。自动处理 meta/init/text/tool/usage/end。
     func stream(taskId: String,
+                from: Int = 0,
                 onEvent: @escaping (ChatEvent) -> Void,
                 onClose: @escaping () -> Void) -> Task<Void, Never>? {
         guard var comp = URLComponents(url: baseURL.appendingPathComponent("api/stream/\(taskId)"), resolvingAgainstBaseURL: false) else { return nil }
-        if let t = token { comp.queryItems = [URLQueryItem(name: "token", value: t)] }
+        var items: [URLQueryItem] = []
+        if let t = token { items.append(URLQueryItem(name: "token", value: t)) }
+        // 从上次收到的位置续上，重连不重放已有内容
+        if from > 0 { items.append(URLQueryItem(name: "from", value: "\(from)")) }
+        if !items.isEmpty { comp.queryItems = items }
         guard let url = comp.url else { return nil }
 
         var req = URLRequest(url: url)
         req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        // 代理会把长连接冻住：既不断开也不传数据。25 秒没任何字节就主动断开，
+        // 交给上层的重连逻辑重新接上，避免界面卡死要重进才刷新
+        req.timeoutIntervalForRequest = 25
 
         return Task { [weak self] in
             guard let self else { return }

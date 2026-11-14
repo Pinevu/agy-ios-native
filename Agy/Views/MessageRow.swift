@@ -28,8 +28,8 @@ struct MessageRow: View {
             MarkdownView(text: text)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .textSelection(.enabled)
-                // 长按留给系统做自由选取；菜单改用点按弹出
-                .onTapGesture { assistantMenu = item }
+                // 单击留给光标定位，双击弹菜单；长按拖动是系统的自由选取
+                .onTapGesture(count: 2) { assistantMenu = item }
 
         case .thought(let text):
             HStack(alignment: .top, spacing: 6) {
