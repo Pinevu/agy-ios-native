@@ -508,7 +508,8 @@ struct ChatView: View {
     private func previousUserItem() -> (Int, ChatItem)? {
         let users = userTurns
         guard !users.isEmpty else { return nil }
-        let start = turnCursor < 0 ? users.count - 2 : turnCursor - 1
+        // 在底部时跳到最后一轮的开头；只有一轮时也要能跳回去
+        let start = turnCursor < 0 ? users.count - 1 : turnCursor - 1
         guard start >= 0, start < users.count else { return nil }
         return users[start]
     }

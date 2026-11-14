@@ -205,7 +205,7 @@ struct ParagraphView: View {
                 a.foregroundColor = .accentColor
                 a.backgroundColor = Color(.secondarySystemBackground)
             } else {
-                a.font = .system(size: 16, weight: bold ? .semibold : .regular)
+                a.font = .system(size: 16.5, weight: bold ? .semibold : .regular)
             }
             out.append(a)
         }
@@ -230,7 +230,7 @@ struct ParagraphView: View {
                     a.font = .system(size: 14.5, design: .monospaced)
                     a.foregroundColor = .accentColor
                 } else {
-                    a.font = .system(size: 16, weight: bold ? .semibold : .regular)
+                    a.font = .system(size: 16.5, weight: bold ? .semibold : .regular)
                 }
                 out.append(a)
             case .math(let tex):
@@ -281,7 +281,7 @@ struct ParagraphView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
             } else {
                 Text(t)
-                    .font(.system(size: 16, weight: bold ? .semibold : .regular))
+                    .font(.system(size: 16.5, weight: bold ? .semibold : .regular))
             }
 
         case .math(let tex):
