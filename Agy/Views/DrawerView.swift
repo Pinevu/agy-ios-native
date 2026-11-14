@@ -465,12 +465,16 @@ struct QuotaSheet: View {
                 }
             }
             .task { await load() }
+            // 面板开着就每 30 秒同步一次，额度是实时变化的
+            .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { _ in
+                Task { await load() }
+            }
         }
     }
 
     private func load() async {
-        loading = true
-        quota = try? await APIClient.shared.quota()
+        if quota == nil { loading = true }
+        if let q = try? await APIClient.shared.quota() { quota = q }
         loading = false
     }
 

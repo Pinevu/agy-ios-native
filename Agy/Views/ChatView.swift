@@ -482,29 +482,35 @@ struct ChatView: View {
     private func floatingButtons(_ proxy: ScrollViewProxy) -> some View {
         if showBackToBottom {
             VStack(spacing: 8) {
-                if let prev = previousUserItem() {
+                // 到边界也保留按钮（置灰），避免「按钮忽然消失」看着像 bug
+                if !userTurns.isEmpty {
+                    let canUp = prevIndex() != nil
                     Button {
-                        turnCursor = prev.0
-                        // 锚到轮次开头的上方留白，让用户发送的文字落在顶栏下面，而不是被顶栏盖住
+                        guard let i = prevIndex() else { return }
+                        turnCursor = i
                         withAnimation(.easeInOut(duration: 0.24)) {
-                            proxy.scrollTo(prev.1.id, anchor: UnitPoint(x: 0.5, y: 0.06))
+                            proxy.scrollTo(userTurns[i].1.id, anchor: UnitPoint(x: 0.5, y: 0.06))
                         }
                     } label: {
-                        fabIcon("chevron.up")
+                        fabIcon("chevron.up", disabled: !canUp)
                     }
                     .buttonStyle(PressableButtonStyle())
+                    .disabled(!canUp)
                     .accessibilityLabel("回上一轮")
                 }
-                if let next = nextUserItem() {
+                if turnCursor >= 0 {
+                    let canDown = nextIndex() != nil
                     Button {
-                        turnCursor = next.0
+                        guard let i = nextIndex() else { return }
+                        turnCursor = i
                         withAnimation(.easeInOut(duration: 0.24)) {
-                            proxy.scrollTo(next.1.id, anchor: UnitPoint(x: 0.5, y: 0.06))
+                            proxy.scrollTo(userTurns[i].1.id, anchor: UnitPoint(x: 0.5, y: 0.06))
                         }
                     } label: {
-                        fabIcon("chevron.down")
+                        fabIcon("chevron.down", disabled: !canDown)
                     }
                     .buttonStyle(PressableButtonStyle())
+                    .disabled(!canDown)
                     .accessibilityLabel("回下一轮")
                 }
                 Button {
@@ -523,10 +529,10 @@ struct ChatView: View {
         }
     }
 
-    private func fabIcon(_ name: String) -> some View {
+    private func fabIcon(_ name: String, disabled: Bool = false) -> some View {
         Image(systemName: name)
             .font(.system(size: 14, weight: .semibold))
-            .foregroundStyle(.primary)
+            .foregroundStyle(disabled ? Color.secondary.opacity(0.45) : Color.primary)
             .frame(width: 38, height: 38)
             .background(
                 Circle().fill(Color(.systemBackground))
@@ -545,12 +551,26 @@ struct ChatView: View {
 
     /// 上一个起点：在底部时从「倒数第二轮」起跳（最后一轮就是眼前这条，跳它等于没动）
     private func previousUserItem() -> (Int, ChatItem)? {
+        guard let i = prevIndex() else { return nil }
+        return userTurns[i]
+    }
+
+    /// 上一轮的下标；nil 表示已经在最早一轮
+    private func prevIndex() -> Int? {
         let users = userTurns
         guard !users.isEmpty else { return nil }
-        // 在底部时跳到最后一轮的开头；只有一轮时也要能跳回去
         let start = turnCursor < 0 ? users.count - 1 : turnCursor - 1
         guard start >= 0, start < users.count else { return nil }
-        return users[start]
+        return start
+    }
+
+    /// 下一轮的下标；nil 表示已经在最后一轮
+    private func nextIndex() -> Int? {
+        let users = userTurns
+        guard !users.isEmpty, turnCursor >= 0 else { return nil }
+        let start = turnCursor + 1
+        guard start >= 0, start < users.count else { return nil }
+        return start
     }
 
     /// 下一轮；已经在底部时没有下一轮

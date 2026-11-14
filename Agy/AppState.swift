@@ -17,6 +17,8 @@ struct RunningTask {
 final class AppState: ObservableObject {
     // 鉴权
     @Published var isLoggedIn = false
+    /// 启动校验中：本地有令牌时先别显示登录页，否则会闪一下
+    @Published var isBooting = false
     @Published var loginError: String?
     @Published var isLoggingIn = false
 
@@ -266,6 +268,8 @@ final class AppState: ObservableObject {
     func switchInstance(_ inst: Instance) async {
         // 切实例前把当前会话落盘，后台任务保持运行
         if let cur = currentSession?.id { sessionItems[cur] = items }
+        // 目标实例本地有令牌时先进占位，校验期间不闪登录页
+        let willHaveToken = (UserDefaults.standard.string(forKey: APIClient.tokenKey(for: inst.url))?.isEmpty == false)
         currentInstanceId = inst.id
         api.setBase(inst.url)
         loadModelForCurrentInstance()
@@ -277,7 +281,9 @@ final class AppState: ObservableObject {
         items = []
         assistantIndex = nil
         isLoggedIn = false
+        if willHaveToken { isBooting = true }
         let ok = await api.checkSession()
+        isBooting = false
         if ok {
             isLoggedIn = true
             await refreshSessions()
@@ -355,6 +361,9 @@ final class AppState: ObservableObject {
 
     func bootstrap() async {
         loadModelForCurrentInstance()
+        // 本地存了令牌就先顶着，校验期间不闪登录页
+        isBooting = api.isLoggedIn
+        defer { isBooting = false }
         await refreshModels()
         guard api.isLoggedIn else { isLoggedIn = false; return }
         let ok = await api.checkSession()
