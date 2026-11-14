@@ -248,21 +248,23 @@ struct ParagraphView: View {
 
     var body: some View {
         if hasMath {
-            // 行内公式一律转 Unicode：用原生 Text 混排，速度最快且不会崩
-            Text(attributedWithMath)
-                .lineSpacing(4)
-                .fixedSize(horizontal: false, vertical: true)
+            // 行内公式转 Unicode 后同样走可选文本，复制跟手
+            SelectableText(attributed: nsAttributed(attributedWithMath))
                 .frame(maxWidth: .infinity, alignment: .leading)
         } else if needsFlow {
             FlowLayout(spacing: 3, lineSpacing: 7) {
                 ForEach(segs) { seg in segView(seg) }
             }
         } else {
-            Text(attributed)
-                .lineSpacing(4)
-                .fixedSize(horizontal: false, vertical: true)
+            // 纯文本走 UIKit：选择和复制跟手，不跟外层滚动抢手势
+            SelectableText(attributed: nsAttributed(attributed))
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    /// AttributedString → NSAttributedString，给 UIKit 文本视图用
+    private func nsAttributed(_ a: AttributedString) -> NSAttributedString {
+        (try? NSAttributedString(a, including: \.uiKit)) ?? NSAttributedString(string: String(a.characters))
     }
 
     @ViewBuilder
