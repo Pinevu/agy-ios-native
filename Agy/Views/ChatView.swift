@@ -16,10 +16,13 @@ struct ChatView: View {
     @State private var showModelPicker = false
     @State private var showQuota = false
     @State private var showAttach = false
-    @State private var photoItem: PhotosPickerItem?
     @State private var showPhotoPicker = false
     @State private var showFileImporter = false
     @State private var showCamera = false
+    /// 输入框草稿留在本地：它是 @Published，若直接绑 state.draft，每敲一个字都会
+    /// 让整个 ChatView（包含整张消息列表）重算一次，键盘输入必然卡。
+    @State private var input: String = ""
+    @State private var photoItems: [PhotosPickerItem] = []
     /// 点按某条助手消息后弹出的操作菜单
     @State private var assistantMenu: ChatItem? = nil
     @State private var capturedImage: UIImage?
@@ -131,19 +134,29 @@ struct ChatView: View {
             }
             capturedImage = nil
         }
-        .photosPicker(isPresented: $showPhotoPicker, selection: $photoItem, matching: .images)
-        .onChange(of: photoItem) { item in
-            guard let item else { return }
+        .photosPicker(isPresented: $showPhotoPicker,
+                      selection: $photoItems,
+                      maxSelectionCount: 9,
+                      matching: .images,
+                      photoLibrary: .shared())
+        .onChange(of: photoItems) { items in
+            guard !items.isEmpty else { return }
             Task {
-                if let data = try? await item.loadTransferable(type: Data.self) {
-                    state.attachments.append(.init(name: "photo_\(Int(Date().timeIntervalSince1970)).jpg",
-                                                   data: data, isImage: true))
+                // 一次选多张：逐张读取后统一追加，最后再清空选择状态
+                for (offset, item) in items.enumerated() {
+                    if let data = try? await item.loadTransferable(type: Data.self) {
+                        let ts = Int(Date().timeIntervalSince1970)
+                        state.attachments.append(.init(name: "photo_\(ts)_\(offset).jpg",
+                                                       data: data, isImage: true))
+                    }
                 }
-                photoItem = nil
+                photoItems = []
             }
         }
-        .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
-            if case .success(let urls) = result, let url = urls.first {
+        .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+            guard case .success(let urls) = result else { return }
+            // 文件也支持一次选多个；逐个读取，避免单个文件权限失败拖垮整批
+            for url in urls {
                 let access = url.startAccessingSecurityScopedResource()
                 defer { if access { url.stopAccessingSecurityScopedResource() } }
                 if let data = try? Data(contentsOf: url) {
@@ -219,6 +232,8 @@ struct ChatView: View {
             headerButton("plus") {
                 dismissKeyboard()
                 state.newSession()
+                input = ""
+                editingItem = nil
                 inputFocused = false
             }
 
@@ -256,7 +271,7 @@ struct ChatView: View {
         let raw: String
         if case .user(let t, _, _) = item.kind { raw = item.rawText ?? t } else { raw = item.rawText ?? "" }
         if case .user(_, _, let paths) = item.kind { editingPaths = paths } else { editingPaths = [] }
-        state.draft = raw
+        input = raw
         editingItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { inputFocused = true }
     }
@@ -264,7 +279,7 @@ struct ChatView: View {
     /// 退出编辑态（保留还是清空输入交给调用方）
     private func cancelEditing(clearDraft: Bool = true) {
         editingItem = nil
-        if clearDraft { state.draft = "" }
+        if clearDraft { input = "" }
         inputFocused = false
     }
 
@@ -281,9 +296,9 @@ struct ChatView: View {
     private var messageList: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                // 流式期间每行高度都在变，LazyVStack 有时会在重定位后回收可见行，
-                // 留下一整片可滚动空白。会话规模在手机可承受范围内时宁可完整布局，别装聪明。
-                VStack(alignment: .leading, spacing: 12) {
+                // 之前的白屏来自几何坐标+系统锚点互相争抢，不是懒加载本身。
+                // 单锚点方案下用回 LazyVStack：长会话只布局可见行，输入才不卡。
+                LazyVStack(alignment: .leading, spacing: 12) {
                     if state.items.isEmpty {
                         if state.loadingSession != nil {
                             loadingState
@@ -333,7 +348,7 @@ struct ChatView: View {
                     }
             )
             .id(state.currentSession?.id ?? "draft")
-            .scrollDismissesKeyboard(.interactively)
+            .scrollDismissesKeyboard(.immediately)
             .overlay {
                 // 会话内容还在加载时盖住列表，不让视口落在空白区
                 if state.loadingSession != nil && state.items.isEmpty {
@@ -623,7 +638,7 @@ struct ChatView: View {
                     HStack(spacing: 8) {
                         ForEach(state.attachments) { att in
                             ZStack(alignment: .topTrailing) {
-                                if att.isImage, let img = UIImage(data: att.data) {
+                                if att.isImage, let img = ImageCache.shared.decoded(att.data) {
                                     Image(uiImage: img)
                                         .resizable()
                                         .scaledToFill()
@@ -666,13 +681,13 @@ struct ChatView: View {
                 }
                 .buttonStyle(.plain)
 
-                TextField("", text: $state.draft, axis: .vertical)
+                TextField("", text: $input, axis: .vertical)
                     .font(.system(size: 16.5))
                     .lineLimit(1...5)
                     .focused($inputFocused)
                     .padding(.vertical, 9)
                     .overlay(alignment: .leading) {
-                        if state.draft.isEmpty {
+                        if input.isEmpty {
                             Text("询问 Antigravity")
                                 .font(.system(size: 16.5))
                                 .foregroundStyle(Color(.placeholderText))
@@ -681,8 +696,8 @@ struct ChatView: View {
                     }
 
                 Button {
-                    let empty = state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        && state.attachments.isEmpty
+                    let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let empty = trimmed.isEmpty && state.attachments.isEmpty
                     if empty && !state.isCurrentTaskRunning {
                         // 空内容点发送 → 聚焦输入框，而不是一个点了没反应的灰按钮
                         inputFocused = true
@@ -694,14 +709,16 @@ struct ChatView: View {
                             // 空输入 + 运行中 = 停止
                             await state.stop()
                         } else if let editing = editingItem {
-                            let text = state.draft
                             editingItem = nil
                             state.draft = ""
-                            inputFocused = false
+                            input = ""
                             let keep = editingPaths
                             editingPaths = []
-                            await state.editAndResend(itemId: editing.id, newText: text, keepPaths: keep)
+                            await state.editAndResend(itemId: editing.id, newText: trimmed, keepPaths: keep)
                         } else {
+                            // 只在真正发送时写回全局草稿，避免每敲一个字整页重算
+                            state.draft = input
+                            input = ""
                             await state.send()
                         }
                     }
@@ -738,13 +755,13 @@ struct ChatView: View {
     /// 运行中且有内容 = 排队追加；运行中且空 = 停止
     private var isQueueMode: Bool {
         state.isCurrentTaskRunning &&
-        (!state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !state.attachments.isEmpty)
+        (!input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !state.attachments.isEmpty)
     }
 
     private var buttonColor: Color {
         if isQueueMode { return Color.accentColor }
         if state.isCurrentTaskRunning { return .red }
-        let empty = state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && state.attachments.isEmpty
+        let empty = input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && state.attachments.isEmpty
         return empty ? Color(.systemGray3) : Color.accentColor
     }
 

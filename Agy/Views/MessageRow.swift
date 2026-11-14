@@ -101,7 +101,7 @@ struct MessageRow: View {
         VStack(alignment: .trailing, spacing: 5) {
             if !attachments.isEmpty {
                 ForEach(Array(attachments.enumerated()), id: \.offset) { _, data in
-                    if let img = UIImage(data: data) {
+                    if let img = ImageCache.shared.decoded(data) {
                         Image(uiImage: img)
                             .resizable()
                             .scaledToFit()

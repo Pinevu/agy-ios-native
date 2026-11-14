@@ -49,7 +49,28 @@ func looksLikeMath(_ tex: String) -> Bool {
 }
 
 enum MarkdownParser {
+    /// 流式消息每帧都会重算 body；没有缓存就会把整段文本重新解析一遍，
+    /// 键盘输入和滚动都跟着变卡。按原文缓存，命中直接复用。
+    private final class CacheBox: NSObject {
+        let blocks: [MDBlock]
+        init(_ b: [MDBlock]) { blocks = b }
+    }
+    private static let cache: NSCache<NSString, CacheBox> = {
+        let c = NSCache<NSString, CacheBox>()
+        c.countLimit = 160
+        c.totalCostLimit = 12 * 1024 * 1024
+        return c
+    }()
+
     static func parse(_ src: String) -> [MDBlock] {
+        let key = src as NSString
+        if let hit = cache.object(forKey: key) { return hit.blocks }
+        let out = parseUncached(src)
+        cache.setObject(CacheBox(out), forKey: key, cost: src.utf8.count)
+        return out
+    }
+
+    private static func parseUncached(_ src: String) -> [MDBlock] {
         var blocks: [MDBlock] = []
         let lines = src.components(separatedBy: "\n")
         var i = 0

@@ -9,6 +9,8 @@ final class LiveActivityManager {
     private var activity: Activity<AgyActivityAttributes>?
     private var ticker: Task<Void, Never>?
     private var startedAt: Date = Date()
+    /// 工具事件可能每秒来好几条；每来一条就跨进程更新一次活动会拖慢主线程。
+    private var lastStepPush: Date = .distantPast
     private var state = AgyActivityAttributes.ContentState(title: "", elapsed: 0, step: "正在启动…", running: true)
 
     private var available: Bool {
@@ -37,6 +39,12 @@ final class LiveActivityManager {
     func update(title: String? = nil, step: String? = nil, running: Bool? = nil) {
         guard available, #available(iOS 16.2, *) else { return }
         guard let act = activity else { return }
+        // 纯步骤更新做 1.5 秒节流；标题/运行态变化不做限制
+        if title == nil, running == nil {
+            let now = Date()
+            guard now.timeIntervalSince(lastStepPush) > 1.5 else { return }
+            lastStepPush = now
+        }
         if let t = title, !t.isEmpty { state.title = t }
         if let s = step, !s.isEmpty { state.step = s }
         if let r = running { state.running = r }
