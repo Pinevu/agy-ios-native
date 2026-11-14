@@ -21,18 +21,20 @@ struct AgyLiveActivity: Widget {
                         .lineLimit(1)
                     Text(context.state.step)
                         .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Color.black.opacity(0.58))
                         .lineLimit(1)
                 }
                 Spacer(minLength: 6)
                 Text(timeText(context.state.elapsed))
                     .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.black.opacity(0.58))
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
-            .activityBackgroundTint(Color.black.opacity(0.55))
-            .activitySystemActionForegroundColor(.white)
+            // 锁屏实时活动此前强制黑底，系统无法按用户选择的浅色外观渲染。
+            // 改为明亮材质基调，文本/操作色也用深色，和 App 的亮色模式一致。
+            .activityBackgroundTint(Color.white.opacity(0.92))
+            .activitySystemActionForegroundColor(.black)
 
         } dynamicIsland: { context in
             DynamicIsland {

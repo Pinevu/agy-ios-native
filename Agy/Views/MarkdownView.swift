@@ -12,14 +12,18 @@ struct MarkdownView: View {
     @State private var blocks: [MDBlock] = []
 
     var body: some View {
+        // 流式时不能先等 .task 跑完再出内容：每次尾部文本变化，旧 blocks 会被清空一帧，
+        // LazyVStack 正好在那一帧回收行，就会出现整页白屏。实时行直接同步解析；
+        // 输出完成后仍用缓存，省掉长历史的重复解析。
+        let shown = isLive ? MarkdownParser.parse(text) : blocks
         VStack(alignment: .leading, spacing: 11) {
-            ForEach(blocks) { block in
+            ForEach(shown) { block in
                 blockView(block)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .task(id: text) {
-            blocks = MarkdownParser.parse(text)
+            if !isLive { blocks = MarkdownParser.parse(text) }
         }
     }
 

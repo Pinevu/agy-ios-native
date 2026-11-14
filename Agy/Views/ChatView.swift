@@ -2,32 +2,6 @@ import SwiftUI
 import UIKit
 import PhotosUI
 
-/// iOS 17+ 的默认滚动锚点，冷启动直接贴底，避免懒加载白屏
-
-struct BottomAnchorModifier: ViewModifier {
-    func body(content: Content) -> some View {
-        if #available(iOS 17.0, *) {
-            content.defaultScrollAnchor(.bottom)
-        } else {
-            content
-        }
-    }
-}
-
-struct ScrollOffsetKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}
-
-struct ContentHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
-    }
-}
-
 struct ChatView: View {
     @EnvironmentObject var state: AppState
 
@@ -36,23 +10,8 @@ struct ChatView: View {
     @State private var showBackToBottom = false
     /// 是否钉底：用户在底部时，内容变高（图片/公式加载）自动跟随
     @State private var stickBottom = true
-    /// 内容总高度（用于侦测高度变化）
-    @State private var contentHeight: CGFloat = 0
-    @State private var lastAutoScroll = Date.distantPast
     /// 上一次因 streamTick 发起的自动贴底；合并密集工具/文本事件，避免 ScrollView 连续闪动。
     @State private var lastStreamScroll = Date.distantPast
-    /// 内容顶部相对滚动视口的偏移（负值 = 已向上滚）
-    @State private var contentOffset: CGFloat = 0
-    /// 上一次的偏移，用来判断是不是用户真的在滚
-    @State private var lastOffset: CGFloat = 0
-    /// 上一次的内容高度
-    @State private var lastHeight: CGFloat = 0
-    /// 滚动视口高度
-    @State private var viewportHeight: CGFloat = 1
-    /// 手指是否正按在列表上拖动：只有这时才认为滚动是用户意图
-    @State private var userDragging = false
-    /// 键盘改变安全区时 ScrollView 的高度会连跳数次；这段窗口禁止强制滚动，避免白屏闪烁。
-    @State private var keyboardTransitionUntil = Date.distantPast
     @State private var turnCursor: Int = -1
     @State private var showModelPicker = false
     @State private var showQuota = false
@@ -320,10 +279,11 @@ struct ChatView: View {
     // MARK: - 消息列表
 
     private var messageList: some View {
-        GeometryReader { outer in
-            ScrollViewReader { proxy in
+        ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
+                // 流式期间每行高度都在变，LazyVStack 有时会在重定位后回收可见行，
+                // 留下一整片可滚动空白。会话规模在手机可承受范围内时宁可完整布局，别装聪明。
+                VStack(alignment: .leading, spacing: 12) {
                     if state.items.isEmpty {
                         if state.loadingSession != nil {
                             loadingState
@@ -334,9 +294,6 @@ struct ChatView: View {
                     ForEach(state.items) { item in
                         messageRow(item)
                     }
-                    Color.clear
-                        .frame(height: 1)
-                        .id("bottom-sentinel")
                     if state.isCurrentTaskRunning {
                         HStack(spacing: 7) {
                             ProgressView().scaleEffect(0.7)
@@ -347,83 +304,34 @@ struct ChatView: View {
                         .padding(.vertical, 4)
                         .id("running")
                     }
+                    // 必须是最后一个子项：此前锚点放在运行提示前面，
+                    // scrollTo 会稳定停在“倒数第二项”，最新提示可能被挤到可视区外。
+                    Color.clear
+                        .frame(height: 1)
+                        .id("bottom-sentinel")
+                        .onAppear {
+                            if showBackToBottom { withAnimation(.easeOut(duration: 0.18)) { showBackToBottom = false } }
+                            stickBottom = true
+                        }
                 }
                                 .padding(.horizontal, 16)
                 .padding(.top, 14)
                 .padding(.bottom, 20)
-                // 量外层 frame 高度：内容不变时高度不变，PreferenceKey 不回传，
-                // 避免流式输出时每帧都触发贴底滚动
-                .background(
-                    GeometryReader { g in
-                        Color.clear.preference(key: ContentHeightKey.self,
-                                               value: g.size.height)
-                    }
-                )
-                // 内容在滚动坐标系里的位置，配合视口高度算出距底距离
-                .background(
-                    GeometryReader { g in
-                        Color.clear.preference(key: ScrollOffsetKey.self,
-                                               value: g.frame(in: .named("chatScroll")).minY)
-                    }
-                )
             }
-            .modifier(BottomAnchorModifier())
-            .coordinateSpace(name: "chatScroll")
-            .onChange(of: outer.size.height) { h in
-                // 键盘弹出/收起会连续改变可视区高度；此前每一次都触发内容高度回调 + scrollTo，
-                // ScrollViewReader 会短暂找不到哨兵，看上去像整页白掉。
-                if abs(h - viewportHeight) > 40 {
-                    keyboardTransitionUntil = Date().addingTimeInterval(0.38)
-                }
-                if h > 1 { viewportHeight = h }
-            }
-            .onAppear { viewportHeight = max(outer.size.height, 1) }
-            .onPreferenceChange(ScrollOffsetKey.self) { off in
-                contentOffset = off
-                lastOffset = off
-                // 不在 onChanged 期间判定：流式内容正长高时手指轻碰屏幕，
-                // 偏移会被系统和内容布局同时改写，容易误关贴底。
-            }
+            // 手动只对 bottom-sentinel 定位；不要叠加系统默认锚点，
+            // 两个锚点在键盘改变安全区时会争抢偏移，造成可滚动的白区。
+            // 只在用户真正向上拖动后停掉跟随；不再用几何坐标猜测距底。
             .simultaneousGesture(
-                DragGesture(minimumDistance: 10)
-                    .onChanged { _ in
-                        if !userDragging { userDragging = true }
-                    }
+                DragGesture(minimumDistance: 12)
                     .onEnded { value in
-                        userDragging = false
-                        // 只有明确向上拖超过一小段，才认为用户要离开底部；
-                        // 轻触、横滑、键盘交互都不应停止流式跟随。
-                        let vertical = value.translation.height
-                        if vertical < -24 {
-                            showBackToBottom = true
+                        if value.translation.height < -28 {
+                            withAnimation(.easeOut(duration: 0.18)) { showBackToBottom = true }
                             stickBottom = false
-                        } else if vertical > 24, distanceFromBottom < 80 {
-                            showBackToBottom = false
-                            stickBottom = true
+                        } else if value.translation.height > 28 {
+                            turnCursor = -1
                         }
                     }
             )
-            .onPreferenceChange(ContentHeightKey.self) { h in
-                guard abs(h - contentHeight) > 1 else { return }
-                contentHeight = h
-                lastHeight = h
-                // 键盘动画尚未稳定时不要 scrollTo；等下一条流事件或动画结束再定位。
-                guard Date() >= keyboardTransitionUntil else { return }
-                recoverIfFellBehind(proxy)
-                // 内容变高（图片/公式陆续布局完）→ 贴底跟随，但节流，避免滚动死循环
-                guard stickBottom else { return }
-                let now = Date()
-                // 正在跑时适度合并高度变化：工具/文字每次都滚会触发整个 LazyVStack
-                // 的连续 layout transaction，长任务就表现为屏幕闪。文本事件的 streamTick
-                // 已负责贴底，内容高度这里只兜图片/公式等异步布局。
-                let gap = state.isCurrentTaskRunning ? 0.10 : 0.35
-                guard now.timeIntervalSince(lastAutoScroll) > gap else { return }
-                lastAutoScroll = now
-                DispatchQueue.main.async {
-                    guard Date() >= keyboardTransitionUntil else { return }
-                    withAnimation(nil) { proxy.scrollTo("bottom-sentinel", anchor: .bottom) }
-                }
-            }
             .id(state.currentSession?.id ?? "draft")
             .scrollDismissesKeyboard(.interactively)
             .overlay {
@@ -454,12 +362,11 @@ struct ChatView: View {
             .onChange(of: state.streamTick) { _ in
                 // 文本、工具开始、工具结束、回放补齐都统一增加 streamTick。
                 // 合并 80ms 内的多次变更，避免长任务连续 scrollTo 引发画面闪动。
-                guard stickBottom, Date() >= keyboardTransitionUntil else { return }
+                guard stickBottom else { return }
                 let now = Date()
                 guard now.timeIntervalSince(lastStreamScroll) > 0.08 else { return }
                 lastStreamScroll = now
                 DispatchQueue.main.async {
-                    guard Date() >= keyboardTransitionUntil else { return }
                     withAnimation(nil) { proxy.scrollTo("bottom-sentinel", anchor: .bottom) }
                 }
             }
@@ -475,36 +382,8 @@ struct ChatView: View {
                 forceScrollToBottom(proxy)
             }
 
-            }
         }
     }
-
-    /// 距底多少（内容总高 + 顶部偏移 - 视口高）
-    private var distanceFromBottom: CGFloat {
-        contentHeight + contentOffset - viewportHeight
-    }
-
-    /// 按钮显隐。只在用户真的手动滚动时调用，
-    /// 避免流式输出导致内容变高时被误判成「用户离开了底部」而停止跟随。
-    private func updateBackButton() {
-        guard viewportHeight > 50, contentHeight > 1 else { return }
-        let d = distanceFromBottom
-        if !showBackToBottom, d > 120 {
-            withAnimation(.easeOut(duration: 0.18)) { showBackToBottom = true }
-            stickBottom = false
-        } else if showBackToBottom, d < 40 {
-            withAnimation(.easeOut(duration: 0.18)) { showBackToBottom = false }
-            stickBottom = true
-        }
-    }
-
-    /// 内容变高后的兜底：应当贴底却掉队太远，就把跟随拉回来（只纠正，不改用户意图）
-    private func recoverIfFellBehind(_ proxy: ScrollViewProxy) {
-        guard stickBottom, viewportHeight > 50, contentHeight > 1 else { return }
-        guard distanceFromBottom > 200 else { return }
-        withAnimation(nil) { proxy.scrollTo("bottom-sentinel", anchor: .bottom) }
-    }
-
 
 
     /// 单行独立成函数，避免 messageList 的表达式大到编译器算不出来
@@ -529,23 +408,15 @@ struct ChatView: View {
 
     // MARK: - 悬浮滚动按钮
 
-    /// 强制贴底：重置滚动状态并多次重试，兜住图片/公式的布局耗时。
-    /// 不能受 showBackToBottom 影响 —— 否则「滚偏了 → 按钮出现 → 不敢滚」会死锁成白屏。
+    /// 强制贴底：重置滚动状态并在布局完成后的几帧重试。
+    /// 坐标/键盘的几何判断已移除；所有路径只对同一个稳定锚点定位。
     private func forceScrollToBottom(_ proxy: ScrollViewProxy, immediate: Bool = false) {
         showBackToBottom = false
         stickBottom = true
-        let delays = immediate ? [0.02] : [0.02, 0.12, 0.3, 0.7]
+        let delays = immediate ? [0.02] : [0.02, 0.16, 0.42]
         for delay in delays {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                // 会话切换仍允许强制贴底；仅键盘安全区正在动画时延后，避免白屏。
-                let remaining = keyboardTransitionUntil.timeIntervalSinceNow
-                if remaining > 0 {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + remaining + 0.03) {
-                        withAnimation(nil) { proxy.scrollTo("bottom-sentinel", anchor: .bottom) }
-                    }
-                } else {
-                    withAnimation(nil) { proxy.scrollTo("bottom-sentinel", anchor: .bottom) }
-                }
+                withAnimation(nil) { proxy.scrollTo("bottom-sentinel", anchor: .bottom) }
             }
         }
     }
@@ -588,8 +459,6 @@ struct ChatView: View {
                 Button {
                     turnCursor = -1
                     stickBottom = true
-                    // 不在这里手动隐藏：交给距离测量，滚到底后自己消失，
-                    // 否则按钮先消失、滚动还没完成，途中又被判定为「离底部很远」重新冒出
                     forceScrollToBottom(proxy)
                 } label: {
                     fabIcon("arrow.down.to.line")
