@@ -362,6 +362,7 @@ struct ChatView: View {
             .onChange(of: outer.size.height) { h in
                 if h > 1 { viewportHeight = h }
             }
+            .onAppear { viewportHeight = max(outer.size.height, 1) }
             .onPreferenceChange(ScrollOffsetKey.self) { off in
                 contentOffset = off
                 updateBackButton()
@@ -423,7 +424,6 @@ struct ChatView: View {
 
             }
         }
-        .onAppear { viewportHeight = max(outer.size.height, 1) }
     }
 
     /// 按钮显隐：距底超过 120 才出现，回到底部 40 以内才消失（滞回，避免流式时闪）
