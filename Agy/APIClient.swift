@@ -28,6 +28,8 @@ class APIClient {
     private(set) var token: String?
 
     private let session: URLSession
+    /// 事件流专用：空闲 25 秒即超时，避免代理冻住连接导致界面卡死
+    private let streamSession: URLSession
     private let decoder: JSONDecoder
 
     init() {
@@ -37,6 +39,10 @@ class APIClient {
         cfg.waitsForConnectivity = true
         cfg.httpMaximumConnectionsPerHost = 16
         session = URLSession(configuration: cfg)
+        let scfg = URLSessionConfiguration.default
+        scfg.timeoutIntervalForRequest = 25
+        scfg.timeoutIntervalForResource = 7200
+        streamSession = URLSession(configuration: scfg)
         decoder = JSONDecoder()
         baseURLString = UserDefaults.standard.string(forKey: "agy_base_url") ?? "https://agy.nooh.cc"
         token = UserDefaults.standard.string(forKey: Self.tokenKey(for: baseURLString))
@@ -278,14 +284,12 @@ class APIClient {
 
         var req = URLRequest(url: url)
         req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-        // 代理会把长连接冻住：既不断开也不传数据。25 秒没任何字节就主动断开，
-        // 交给上层的重连逻辑重新接上，避免界面卡死要重进才刷新
-        req.timeoutIntervalForRequest = 25
 
         return Task { [weak self] in
             guard let self else { return }
             do {
-                let (bytes, resp) = try await self.session.bytes(for: req)
+                // 流专用会话：25 秒无数据就断开，交给重连。普通请求不受影响
+                let (bytes, resp) = try await self.streamSession.bytes(for: req)
                 guard let http = resp as? HTTPURLResponse, http.statusCode == 200 else {
                     onClose(); return
                 }
