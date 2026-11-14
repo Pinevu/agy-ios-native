@@ -5,6 +5,8 @@ import UIKit
 
 struct MarkdownView: View {
     let text: String
+    /// 正在流式输出：用 SwiftUI 渲染保证高度同步、贴底跟手；结束后再切 UIKit 提供选择
+    var isLive: Bool = false
 
     /// 解析结果缓存：只在 text 变化时重算，滚动/父视图刷新不再重复解析
     @State private var blocks: [MDBlock] = []
@@ -25,7 +27,7 @@ struct MarkdownView: View {
     private func blockView(_ block: MDBlock) -> some View {
         switch block {
         case .heading(let level, let t):
-            ParagraphView(text: t)
+            ParagraphView(text: t, isLive: isLive)
                 .font(.system(size: headingSize(level), weight: level <= 2 ? .bold : .semibold))
                 .padding(.top, level <= 2 ? 14 : 10)
 
@@ -33,7 +35,7 @@ struct MarkdownView: View {
             if let callout = Callout.parse(t) {
                 CalloutView(callout: callout)
             } else {
-                ParagraphView(text: t)
+                ParagraphView(text: t, isLive: isLive)
             }
 
         case .bullets(let arr):
@@ -44,7 +46,7 @@ struct MarkdownView: View {
                             .fill(Color.secondary.opacity(0.55))
                             .frame(width: 5.5, height: 5.5)
                             .offset(y: -3)
-                        ParagraphView(text: item)
+                        ParagraphView(text: item, isLive: isLive)
                     }
                 }
             }
@@ -57,7 +59,7 @@ struct MarkdownView: View {
                             .font(.system(size: 16, weight: .medium))
                             .foregroundStyle(.secondary)
                             .frame(minWidth: 20, alignment: .leading)
-                        ParagraphView(text: item)
+                        ParagraphView(text: item, isLive: isLive)
                     }
                 }
             }
@@ -70,7 +72,7 @@ struct MarkdownView: View {
                     RoundedRectangle(cornerRadius: 1.5)
                         .fill(Color.accentColor.opacity(0.55))
                         .frame(width: 3)
-                    ParagraphView(text: t)
+                    ParagraphView(text: t, isLive: isLive)
                         .foregroundStyle(.secondary)
                 }
                 .fixedSize(horizontal: false, vertical: true)
@@ -167,7 +169,7 @@ struct CalloutView: View {
                 .foregroundStyle(callout.color)
 
                 if !callout.body.isEmpty {
-                    ParagraphView(text: callout.body)
+                    ParagraphView(text: callout.body, isLive: isLive)
                         .foregroundStyle(.secondary)
                 }
             }
@@ -183,6 +185,7 @@ struct CalloutView: View {
 /// 段落：行内富文本（粗体 / 行内代码）连续排版，含公式或图片时才拆块
 struct ParagraphView: View {
     let text: String
+    var isLive: Bool = false
 
     private var segs: [InlineSeg] { InlineParser.parse(text) }
 
@@ -248,15 +251,27 @@ struct ParagraphView: View {
 
     var body: some View {
         if hasMath {
-            // 行内公式转 Unicode 后同样走可选文本，复制跟手
-            SelectableText(attributed: nsAttributed(attributedWithMath, lineGap: 6))
-                .frame(maxWidth: .infinity, alignment: .leading)
+            if isLive {
+                // 流式中：原生 Text，高度同步，贴底不飘
+                Text(attributedWithMath)
+                    .lineSpacing(6)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                SelectableText(attributed: nsAttributed(attributedWithMath, lineGap: 6))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         } else if needsFlow {
             FlowLayout(spacing: 3, lineSpacing: 8) {
                 ForEach(segs) { seg in segView(seg) }
             }
+        } else if isLive {
+            Text(attributed)
+                .lineSpacing(6)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
         } else {
-            // 纯文本走 UIKit：选择和复制跟手，不跟外层滚动抢手势
+            // 输出完成后走 UIKit：选择和复制跟手，不跟外层滚动抢手势
             SelectableText(attributed: nsAttributed(attributed, lineGap: 6))
                 .frame(maxWidth: .infinity, alignment: .leading)
         }

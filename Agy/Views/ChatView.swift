@@ -409,7 +409,9 @@ struct ChatView: View {
 
     /// 单行独立成函数，避免 messageList 的表达式大到编译器算不出来
     private func messageRow(_ item: ChatItem) -> some View {
-        MessageRow(item: item, actions: MessageActions(
+        // 最后一条且在运行中 = 正在流式写入
+        let live = state.isRunning && state.items.last?.id == item.id
+        return MessageRow(item: item, isLive: live, actions: MessageActions(
             edit: { openEditor(for: $0) },
             retry: { it in
                 Task {
@@ -428,10 +430,11 @@ struct ChatView: View {
 
     /// 强制贴底：重置滚动状态并多次重试，兜住图片/公式的布局耗时。
     /// 不能受 showBackToBottom 影响 —— 否则「滚偏了 → 按钮出现 → 不敢滚」会死锁成白屏。
-    private func forceScrollToBottom(_ proxy: ScrollViewProxy) {
+    private func forceScrollToBottom(_ proxy: ScrollViewProxy, immediate: Bool = False) {
         showBackToBottom = false
         stickBottom = true
-        for delay in [0.02, 0.12, 0.3, 0.7] {
+        let delays = immediate ? [0.02] : [0.02, 0.12, 0.3, 0.7]
+        for delay in delays {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                 withAnimation(nil) {
                     proxy.scrollTo("bottom-sentinel", anchor: .bottom)

@@ -12,6 +12,8 @@ struct MessageActions {
 
 struct MessageRow: View {
     let item: ChatItem
+    /// 这条正在被流式写入：正文用 SwiftUI 渲染，保证贴底跟手
+    var isLive: Bool = false
     var actions: MessageActions = .none
     /// 点按弹出的消息菜单，挂在列表外层，避免每行一个 dialog
     @Binding var assistantMenu: ChatItem?
@@ -25,7 +27,7 @@ struct MessageRow: View {
             noteLine(text)
 
         case .assistant(let text):
-            MarkdownView(text: text)
+            MarkdownView(text: text, isLive: isLive)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .textSelection(.enabled)
 
@@ -118,10 +120,10 @@ struct MessageRow: View {
                     Spacer(minLength: 44)
 
                     Text(text)
-                        .font(.system(size: 15.5))
+                        .font(.system(size: 18))
                         .textSelection(.enabled)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
+                        .padding(.horizontal, 15)
+                        .padding(.vertical, 11)
                         .background(
                             RoundedRectangle(cornerRadius: 18, style: .continuous)
                                 .fill(Color.accentColor.opacity(0.13))

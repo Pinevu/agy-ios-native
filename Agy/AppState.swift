@@ -762,6 +762,8 @@ final class AppState: ObservableObject {
             }
             streamTick &+= 1
             taskBuffers[taskId] = items
+            // 任何文字落盘都贴底（流式输出、工具调用、直接回复）
+            Task { @MainActor in await state.refreshSessions() }
         } else {
             var buf = taskBuffers[taskId] ?? []
             if let last = buf.indices.last, case .assistant(let old) = buf[last].kind {
