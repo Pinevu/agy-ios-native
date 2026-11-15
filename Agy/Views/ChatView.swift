@@ -2,6 +2,49 @@ import SwiftUI
 import UIKit
 import PhotosUI
 
+/// 行级记忆：父视图每次重算（例如输入框每敲一个字）都会重建这些值，
+/// 但内容没变的行不该重新渲染一遍富文本 / UIKit 文本视图。这里只比内容，不比闭包。
+private struct ChatRow: View, Equatable {
+    let item: ChatItem
+    let isLive: Bool
+    let menu: ChatItem?
+    let onMenu: (ChatItem?) -> Void
+    let actions: MessageActions
+
+    static func == (a: ChatRow, b: ChatRow) -> Bool {
+        a.isLive == b.isLive
+            && a.item.id == b.item.id
+            && a.menu?.id == b.menu?.id
+            && sameKind(a.item.kind, b.item.kind)
+    }
+
+    private static func sameKind(_ a: ChatItemKind, _ b: ChatItemKind) -> Bool {
+        switch (a, b) {
+        case (.user(let t1, let at1, let p1), .user(let t2, let at2, let p2)):
+            // 附件是整段图片数据，比 count 足够判断有没有变化
+            return t1 == t2 && p1 == p2 && at1.count == at2.count
+        case (.assistant(let x), .assistant(let y)): return x == y
+        case (.note(let x), .note(let y)): return x == y
+        case (.thought(let x), .thought(let y)): return x == y
+        case (.tool(let n1, let i1, let o1, let sec1, let r1),
+              .tool(let n2, let i2, let o2, let sec2, let r2)):
+            return n1 == n2 && r1 == r2 && sec1 == sec2 && i1 == i2
+                && (o1?.count ?? -1) == (o2?.count ?? -1) && o1 == o2
+        case (.usage(let x), .usage(let y)): return x == y
+        case (.error(let x), .error(let y)): return x == y
+        case (.images(let x), .images(let y)): return x == y
+        default: return false
+        }
+    }
+
+    var body: some View {
+        MessageRow(item: item,
+                   isLive: isLive,
+                   actions: actions,
+                   assistantMenu: Binding(get: { menu }, set: { onMenu($0) }))
+    }
+}
+
 struct ChatView: View {
     @EnvironmentObject var state: AppState
 
@@ -307,7 +350,13 @@ struct ChatView: View {
                         }
                     }
                     ForEach(state.items) { item in
-                        messageRow(item)
+                        // 只让内容真正变化的那一行重渲染；输入法打字时整表保持不动
+                        ChatRow(item: item,
+                                isLive: state.isCurrentTaskRunning && state.items.last?.id == item.id,
+                                menu: assistantMenu,
+                                onMenu: { assistantMenu = $0 },
+                                actions: rowActions)
+                            .equatable()
                     }
                     if state.isCurrentTaskRunning {
                         HStack(spacing: 7) {
@@ -379,7 +428,7 @@ struct ChatView: View {
                 // 合并 80ms 内的多次变更，避免长任务连续 scrollTo 引发画面闪动。
                 guard stickBottom else { return }
                 let now = Date()
-                guard now.timeIntervalSince(lastStreamScroll) > 0.08 else { return }
+                guard now.timeIntervalSince(lastStreamScroll) > 0.10 else { return }
                 lastStreamScroll = now
                 DispatchQueue.main.async {
                     withAnimation(nil) { proxy.scrollTo("bottom-sentinel", anchor: .bottom) }
@@ -401,12 +450,9 @@ struct ChatView: View {
     }
 
 
-    /// 单行独立成函数，避免 messageList 的表达式大到编译器算不出来
-    private func messageRow(_ item: ChatItem) -> some View {
-        // 本地 SSE 或 App 恢复后服务端仍在跑，最后一行都按 live 渲染。
-        // 否则重进 App 后会把新工具/文本当成静态行，状态难以持续刷新。
-        let live = state.isCurrentTaskRunning && state.items.last?.id == item.id
-        return MessageRow(item: item, isLive: live, actions: MessageActions(
+    /// 行操作只构造一次，避免每个可见行都新建一组闭包
+    private var rowActions: MessageActions {
+        MessageActions(
             edit: { openEditor(for: $0) },
             retry: { it in
                 Task {
@@ -417,8 +463,7 @@ struct ChatView: View {
             deleteFrom: { it in
                 Task { await state.deleteFrom(itemId: it.id) }
             }
-        ), assistantMenu: $assistantMenu)
-        .id(item.id)
+        )
     }
 
     // MARK: - 悬浮滚动按钮

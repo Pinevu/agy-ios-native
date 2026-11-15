@@ -294,6 +294,9 @@ class APIClient {
                 guard let http = resp as? HTTPURLResponse, http.statusCode == 200 else {
                     onClose(); return
                 }
+                // 每条事件都新建 JSONDecoder() 是纯浪费：解码器本身不便宜。
+                // 一条连接复用一个实例，各连接各自持有，也不会有并发共享问题。
+                let decoder = JSONDecoder()
                 for try await line in bytes.lines {
                     if Task.isCancelled { break }
                     // data 事件和服务端 : ping 都说明这条连接还活着。
@@ -301,7 +304,7 @@ class APIClient {
                     guard line.hasPrefix("data:") else { continue }
                     let json = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
                     guard let data = json.data(using: .utf8) else { continue }
-                    if let ev = try? JSONDecoder().decode(ChatEvent.self, from: data) {
+                    if let ev = try? decoder.decode(ChatEvent.self, from: data) {
                         onEvent(ev)
                         if ev.type == "end" { break }
                     }

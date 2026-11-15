@@ -39,17 +39,24 @@ struct Session: Decodable, Identifiable, Hashable {
             .first.map(String.init) ?? raw
     }
 
-    var displayDate: String {
-        let ts = updated ?? started
-        let d = Date(timeIntervalSince1970: ts)
+    /// 每次渲染都 new 一个 DateFormatter 是列表滚动卡顿的经典来源，改为进程内复用。
+    private static let timeFormatter: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "zh_CN")
-        let cal = Calendar.current
-        if cal.isDateInToday(d) {
-            f.dateFormat = "HH:mm"
-        } else {
-            f.dateFormat = "M/d HH:mm"
-        }
+        f.dateFormat = "HH:mm"
+        return f
+    }()
+
+    private static let dayTimeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "zh_CN")
+        f.dateFormat = "M/d HH:mm"
+        return f
+    }()
+
+    var displayDate: String {
+        let d = Date(timeIntervalSince1970: updated ?? started)
+        let f = Calendar.current.isDateInToday(d) ? Self.timeFormatter : Self.dayTimeFormatter
         return f.string(from: d)
     }
 }

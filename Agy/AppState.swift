@@ -268,8 +268,16 @@ final class AppState: ObservableObject {
         showToast("已重命名")
     }
 
+    /// 标题要跑若干字符串扫描 + 拆分，列表每行都会取一次；按 id+更新时间缓存
+    private var titleMemo: [String: (stamp: Double, text: String)] = [:]
+
     func title(of s: Session) -> String {
-        customTitles[s.id] ?? s.displayTitle
+        if let c = customTitles[s.id] { return c }
+        let stamp = s.updated ?? s.started
+        if let m = titleMemo[s.id], m.stamp == stamp { return m.text }
+        let t = s.displayTitle
+        titleMemo[s.id] = (stamp, t)
+        return t
     }
 
     private var assistantIndex: Int?
@@ -785,7 +793,10 @@ final class AppState: ObservableObject {
     @discardableResult
     private func reconcile(sessionId sid: String) async -> [ChatEvent]? {
         guard let events = try? await api.replay(sid) else { return nil }
-        let snapshot = buildItems(events)
+        var snapshot = buildItems(events)
+        // 当前会话以屏幕上的 items 为准，否则会拿更旧的缓存去接身份
+        let previous = activeSessionKey == sid ? items : (sessionItems[sid] ?? [])
+        snapshot = reuseIdentity(snapshot, like: previous)
         sessionItems[sid] = snapshot
         if activeSessionKey == sid {
             // count 相同不代表内容相同：工具 running→done、同一助手文本增量都会保持条目数。
@@ -1102,8 +1113,36 @@ final class AppState: ObservableObject {
     }
 
     private func apply(_ events: [ChatEvent], live: Bool) {
-        items = buildItems(events)
+        items = reuseIdentity(buildItems(events), like: items)
         assistantIndex = nil
+    }
+
+    /// 行类型标签：只比较“是不是同一类消息”，不看内容。
+    /// 文本增量、工具从运行中变完成都属于同一行，身份不该变。
+    private func kindTag(_ k: ChatItemKind) -> Int {
+        switch k {
+        case .user: return 0
+        case .assistant: return 1
+        case .note: return 2
+        case .thought: return 3
+        case .tool: return 4
+        case .usage: return 5
+        case .error: return 6
+        case .images: return 7
+        }
+    }
+
+    /// 回放快照是全新 UUID；直接赋值会让 LazyVStack 认为每一行都换了，
+    /// 整表销毁重建 → 闪 + 卡 + 丢滚动位置。这里把前缀行的身份接回来。
+    private func reuseIdentity(_ fresh: [ChatItem], like old: [ChatItem]) -> [ChatItem] {
+        guard !fresh.isEmpty, !old.isEmpty else { return fresh }
+        var out = fresh
+        for i in out.indices where i < old.count {
+            if kindTag(out[i].kind) == kindTag(old[i].kind) {
+                out[i].id = old[i].id
+            }
+        }
+        return out
     }
 
     /// 纯函数：把事件流构建成消息列表（批量，只赋值一次）

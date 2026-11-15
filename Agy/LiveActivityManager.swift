@@ -73,7 +73,7 @@ final class LiveActivityManager {
         stopTicker()
         ticker = Task { @MainActor [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
                 guard let self, let act = self.activity else { break }
                 self.state.elapsed = Int(Date().timeIntervalSince(self.startedAt))
                 await act.update(.init(state: self.state, staleDate: nil))

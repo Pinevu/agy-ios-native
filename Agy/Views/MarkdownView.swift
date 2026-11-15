@@ -9,7 +9,14 @@ struct MarkdownView: View {
     var isLive: Bool = false
 
     /// 解析结果缓存：只在 text 变化时重算，滚动/父视图刷新不再重复解析
-    @State private var blocks: [MDBlock] = []
+    @State private var blocks: [MDBlock]
+
+    init(text: String, isLive: Bool = false) {
+        self.text = text
+        self.isLive = isLive
+        // 命中缓存就带着内容出生，省掉「先空一帧再填」的布局跳动
+        _blocks = State(initialValue: MarkdownParser.cached(text) ?? [])
+    }
 
     var body: some View {
         // 流式时不能先等 .task 跑完再出内容：每次尾部文本变化，旧 blocks 会被清空一帧，

@@ -62,6 +62,11 @@ enum MarkdownParser {
         return c
     }()
 
+    /// 只查缓存，不解析。用于视图初始化时先占住正确高度，避免先空后填的跳动。
+    static func cached(_ src: String) -> [MDBlock]? {
+        cache.object(forKey: src as NSString)?.blocks
+    }
+
     static func parse(_ src: String) -> [MDBlock] {
         let key = src as NSString
         if let hit = cache.object(forKey: key) { return hit.blocks }
