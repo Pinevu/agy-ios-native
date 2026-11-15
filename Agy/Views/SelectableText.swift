@@ -6,11 +6,14 @@ import UIKit
 struct SelectableText: UIViewRepresentable {
     let attributed: NSAttributedString
 
+    /// 正文基准字号。所有段落都归一到这个值，避免个别段落掉回更小的字号。
+    private static let baseFontSize: CGFloat = 18
+
     func makeUIView(context: Context) -> SelectableLabel {
         let v = SelectableLabel()
         v.backgroundColor = .clear
         // 与正文一致的基础字号，属性缺失时也不会掉回 17pt
-        v.font = .systemFont(ofSize: 18)
+        v.font = .systemFont(ofSize: Self.baseFontSize)
         v.isEditable = false
         v.isSelectable = true
         v.isScrollEnabled = false
@@ -23,9 +26,8 @@ struct SelectableText: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: SelectableLabel, context: Context) {
-        // 关键：父视图每次重算 body 都会走到这里。如果每次都重建整段 NSAttributedString
-        // 并赋给 UITextView，键盘输入/滚动时整屏的文字行都要重新排版，必卡。
-        // 输入没变就直接返回；变了才归一化一次。
+        // 父视图每次重算 body 都会走到这里。如果每次都重建整段 NSAttributedString
+        // 并赋给 UITextView，键盘输入/滚动时整屏文字都要重新排版，必卡。
         if let cached = context.coordinator.cachedSource,
            cached.isEqual(to: attributed),
            context.coordinator.matchesLastApplied(uiView) {
@@ -33,35 +35,54 @@ struct SelectableText: UIViewRepresentable {
         }
         context.coordinator.cachedSource = attributed
 
-        // attributedText 自带的 UIFont 会覆盖 UITextView.font。逐段强制归一到
-        // 与用户气泡相同的 18pt，同时保留粗体/斜体/等宽等字形特征。
-        let normalized = NSMutableAttributedString(attributedString: attributed)
-        let full = NSRange(location: 0, length: normalized.length)
-        normalized.enumerateAttribute(.font, in: full) { value, range, _ in
-            guard let old = value as? UIFont else { return }
-            if abs(old.pointSize - 18) < 0.01 { return }
-            let font = UIFont(descriptor: old.fontDescriptor, size: 18)
-            normalized.addAttribute(.font, value: font, range: range)
-        }
+        let normalized = Self.normalized(attributed)
         if uiView.attributedText.isEqual(to: normalized) { return }
         uiView.attributedText = normalized
         context.coordinator.applied = normalized
-        context.coordinator.measuredWidth = nil
-        context.coordinator.measuredHeight = nil
+        // 文本变了，旧的测量结果立即作废，否则行高会沿用上一段文字的尺寸
+        context.coordinator.invalidateMeasurement()
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: SelectableLabel, context: Context) -> CGSize? {
-        let width = proposal.width ?? UIScreen.main.bounds.width
-        // 同一段文字、同一宽度反复测量是滚动卡顿的主要来源之一，按结果缓存
-        if context.coordinator.measuredWidth == width,
-           let h = context.coordinator.measuredHeight {
+        let width = max(1, proposal.width ?? UIScreen.main.bounds.width)
+        let c = context.coordinator
+
+        // 关键：测量必须和「当前这段文字」绑定。之前只按宽度缓存，
+        // 一旦文本更新而宽度没变，就会返回上一段文字的高度 —— 行被压短，
+        // 后面的行直接盖上来，看起来又像文字变小又像被裁切。
+        if c.measuredWidth == width,
+           let src = c.measuredSource,
+           src.isEqual(to: attributed),
+           let h = c.measuredHeight {
             return CGSize(width: width, height: h)
         }
-        let size = uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
-        let h = ceil(size.height)
-        context.coordinator.measuredWidth = width
-        context.coordinator.measuredHeight = h
+
+        let rect = Self.normalized(attributed)
+            .boundingRect(with: CGSize(width: width, height: .greatestFiniteMagnitude),
+                          options: [.usesLineFragmentOrigin, .usesFontLeading],
+                          context: nil)
+        let h = ceil(rect.height)
+        c.measuredSource = attributed
+        c.measuredWidth = width
+        c.measuredHeight = h
         return CGSize(width: width, height: h)
+    }
+
+    /// assigned 字号归一：attributedText 自带的 UIFont 会覆盖 UITextView.font，
+    /// 所以逐段强制到基准字号，同时保留粗体/斜体/等宽等字形特征。
+    private static func normalized(_ src: NSAttributedString) -> NSAttributedString {
+        let out = NSMutableAttributedString(attributedString: src)
+        let full = NSRange(location: 0, length: out.length)
+        out.enumerateAttribute(.font, in: full, options: []) { value, range, _ in
+            guard let old = value as? UIFont else {
+                // 没有字体属性的段落显式补上基准字号，否则会跟随 UITextView 的默认值飘
+                out.addAttribute(.font, value: UIFont.systemFont(ofSize: baseFontSize), range: range)
+                return
+            }
+            if abs(old.pointSize - baseFontSize) < 0.01 { return }
+            out.addAttribute(.font, value: UIFont(descriptor: old.fontDescriptor, size: baseFontSize), range: range)
+        }
+        return out
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -69,10 +90,17 @@ struct SelectableText: UIViewRepresentable {
     final class Coordinator {
         var cachedSource: NSAttributedString?
         var applied: NSAttributedString?
+        var measuredSource: NSAttributedString?
         var measuredWidth: CGFloat?
         var measuredHeight: CGFloat?
 
-        /// 只做指针/内容一致性检查，避免每次 update 都重新排版
+        func invalidateMeasurement() {
+            measuredSource = nil
+            measuredWidth = nil
+            measuredHeight = nil
+        }
+
+        /// 只做内容一致性检查，避免每次 update 都重新排版
         func matchesLastApplied(_ view: UITextView) -> Bool {
             guard let applied else { return false }
             return view.attributedText.isEqual(to: applied)
