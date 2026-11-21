@@ -228,6 +228,11 @@ extension AppState {
             return
         }
 
+        // 若会话显示未结束但本地还没拿到最新运行表，先同步一次 /api/running 再决定是否接回 SSE
+        if currentServerTask == nil && !session.done {
+            await syncRunning()
+        }
+
         if let remote = currentServerTask {
             if let cached = sessionItems[session.id], !cached.isEmpty {
                 items = cached

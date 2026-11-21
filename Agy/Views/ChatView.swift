@@ -363,7 +363,9 @@ struct ChatView: View {
         showDrawer = false
         switch route {
         case .open:
-            break
+            if state.currentSession == nil {
+                Task { await state.resumeActiveRunningSessionIfNeeded() }
+            }
         case .session(let sid):
             Task { await state.openSessionById(sid) }
         case .newChat(let prompt, let autoSend):
@@ -1257,25 +1259,30 @@ struct ChatView: View {
         }
     }
 
-    private func jumpToRunning(_ rt: RunningTask) {
-        showRunningList = false
-        if let t = state.sessions.first(where: { $0.id == rt.sessionId }) {
-            Task { await state.open(t) }
-            return
+    private func findSession(for rt: RunningTask) -> Session? {
+        if let t = state.sessions.first(where: { $0.id == rt.sessionId || $0.latestTaskId == rt.taskId || $0.id == rt.taskId }) {
+            return t
         }
-        if let cid = rt.conversationId,
-           let t = state.sessions.first(where: { $0.conversationId == cid }) {
-            Task { await state.open(t) }
-            return
+        if let cid = rt.conversationId, !cid.isEmpty,
+           let t = state.sessions.first(where: { $0.id == cid || $0.conversationId == cid }) {
+            return t
         }
         if !rt.title.isEmpty,
            let t = state.sessions.first(where: { state.title(of: $0) == rt.title }) {
+            return t
+        }
+        return nil
+    }
+
+    private func jumpToRunning(_ rt: RunningTask) {
+        showRunningList = false
+        if let t = findSession(for: rt) {
             Task { await state.open(t) }
             return
         }
         Task {
             await state.refreshSessions()
-            if let t = state.sessions.first(where: { $0.conversationId == rt.conversationId }) {
+            if let t = findSession(for: rt) {
                 await state.open(t)
             } else {
                 state.showToast("找不到对应会话，请下拉刷新列表")

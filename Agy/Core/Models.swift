@@ -228,6 +228,37 @@ struct ServerRecent: Decodable {
     }
 }
 
+/// 兼容后端 latest_tool 既可能是对象 {"name","text","state"} 也可能是纯字符串的场景
+struct RunningToolInfo: Decodable, Hashable {
+    let name: String
+    let text: String?
+    let state: String?
+
+    enum CodingKeys: String, CodingKey {
+        case name, text, state
+    }
+
+    init(name: String, text: String? = nil, state: String? = nil) {
+        self.name = name
+        self.text = text
+        self.state = state
+    }
+
+    init(from decoder: Decoder) throws {
+        if let single = try? decoder.singleValueContainer(),
+           let str = try? single.decode(String.self) {
+            self.name = str
+            self.text = nil
+            self.state = nil
+            return
+        }
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.name = (try? c.decode(String.self, forKey: .name)) ?? ""
+        self.text = try? c.decode(String.self, forKey: .text)
+        self.state = try? c.decode(String.self, forKey: .state)
+    }
+}
+
 struct ServerRunning: Decodable {
     let taskId: String
     let sessionId: String?
@@ -235,8 +266,13 @@ struct ServerRunning: Decodable {
     let title: String?
     let started: Double?
     let elapsed: Int?
-    let latestTool: String?
+    let latestTool: RunningToolInfo?
     let subagentCount: Int?
+
+    var latestToolName: String? {
+        guard let n = latestTool?.name, !n.isEmpty else { return nil }
+        return n
+    }
 
     enum CodingKeys: String, CodingKey {
         case title, started, elapsed

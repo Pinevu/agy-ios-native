@@ -14,8 +14,13 @@ extension AppState {
         let sid = activeSessionKey
         let cid = currentSession?.conversationId ?? conversationId
         return serverRunning[sid]
-            ?? serverRunning.values.first(where: { $0.conversationId != nil && $0.conversationId == cid })
-            ?? (currentSession.flatMap { s in serverRunning.values.first(where: { $0.taskId == s.latestTaskId }) })
+            ?? serverRunning.values.first(where: {
+                (cid != nil && ($0.conversationId == cid || $0.sessionId == cid))
+                || ($0.sessionId == sid || $0.conversationId == sid)
+            })
+            ?? (currentSession.flatMap { s in
+                serverRunning.values.first(where: { $0.taskId == s.latestTaskId || $0.taskId == s.id })
+            })
     }
 
     var isCurrentTaskRunning: Bool {
@@ -26,8 +31,7 @@ extension AppState {
         var out = Array(running.values)
         for (sid, sr) in serverRunning {
             if let idx = out.firstIndex(where: { $0.taskId == sr.taskId }) {
-                // 用服务端权威工具名与子代理数补齐本地状态
-                if let tool = sr.latestTool, !tool.isEmpty {
+                if let tool = sr.latestToolName {
                     out[idx].latestTool = tool
                 }
                 if let sc = sr.subagentCount {
@@ -42,12 +46,12 @@ extension AppState {
                     conversationId: sr.conversationId,
                     title: sr.title ?? "",
                     startedAt: start,
-                    latestTool: sr.latestTool,
+                    latestTool: sr.latestToolName,
                     subagentCount: sr.subagentCount ?? 0
                 ))
             }
         }
-        return out.sorted { $0.startedAt < $1.startedAt }
+        return out.sorted { $0.startedAt > $1.startedAt }
     }
 
     var currentRunningTask: RunningTask? {
@@ -64,7 +68,7 @@ extension AppState {
             conversationId: sr.conversationId,
             title: sr.title ?? "",
             startedAt: start,
-            latestTool: sr.latestTool,
+            latestTool: sr.latestToolName,
             subagentCount: sr.subagentCount ?? 0
         )
     }
@@ -95,9 +99,17 @@ extension AppState {
     func syncRunning(forceCurrentRecovery: Bool = false) async {
         guard let snap = try? await api.runningTasks() else { return }
 
+        // 同一会话若存在旧遗留任务与最新任务，始终保留最新启动（started 最大）的那一条，避免被旧任务覆盖
         var map: [String: ServerRunning] = [:]
         for r in snap.running {
-            map[r.sessionId ?? r.taskId] = r
+            let key = r.conversationId ?? r.sessionId ?? r.taskId
+            if let existing = map[key] {
+                if (r.started ?? 0) > (existing.started ?? 0) {
+                    map[key] = r
+                }
+            } else {
+                map[key] = r
+            }
         }
         let changed = !sameRunningMap(serverRunning, map)
         if changed {
@@ -105,15 +117,15 @@ extension AppState {
             syncWidgetSnapshot()
         }
 
-        // 同步灵动岛（即使在别端发起的任务也能自动挂上灵动岛）
-        if let first = snap.running.first {
+        // 同步灵动岛（优先选最新启动的运行任务）
+        if let first = map.values.sorted(by: { ($0.started ?? 0) > ($1.started ?? 0) }).first {
             let start = first.started.map { Date(timeIntervalSince1970: $0) }
                 ?? Date().addingTimeInterval(-Double(first.elapsed ?? 0))
-            let step = first.latestTool.map { ToolDescribe.title($0) } ?? "正在思考…"
-            let extra = max(0, (first.subagentCount ?? 0) + max(0, snap.running.count - 1))
+            let step = first.latestToolName.map { ToolDescribe.title($0) } ?? "正在思考…"
+            let extra = max(0, (first.subagentCount ?? 0) + max(0, map.count - 1))
             LiveActivityManager.shared.start(
                 title: (first.title?.isEmpty == false ? first.title! : "Antigravity"),
-                sessionKey: first.sessionId ?? first.taskId,
+                sessionKey: first.conversationId ?? first.sessionId ?? first.taskId,
                 step: step,
                 startedAt: start,
                 subagentCount: extra
@@ -153,7 +165,7 @@ extension AppState {
                   x.sessionId == y.sessionId,
                   x.conversationId == y.conversationId,
                   x.title == y.title,
-                  x.latestTool == y.latestTool,
+                  x.latestToolName == y.latestToolName,
                   x.subagentCount == y.subagentCount else { return false }
         }
         return true
@@ -448,7 +460,7 @@ extension AppState {
             conversationId: remote.conversationId,
             title: remote.title ?? "",
             startedAt: start,
-            latestTool: remote.latestTool,
+            latestTool: remote.latestToolName,
             subagentCount: remote.subagentCount ?? 0
         )
         taskBuffers[remote.taskId] = items

@@ -190,15 +190,24 @@ final class AppState: ObservableObject {
         loadModelForCurrentInstance()
         isBooting = api.isLoggedIn
         defer { isBooting = false }
-        await refreshModels()
+        // 模型列表放后台刷新，不阻塞冷启动与运行中任务续接
+        Task { await refreshModels() }
         guard api.isLoggedIn else { isLoggedIn = false; return }
         let ok = await api.checkSession()
         if ok {
             isLoggedIn = true
             async let sTask: Void = refreshSessions()
             async let mTask: Void = syncSessionMeta()
+            async let rTask: Void = syncRunning()
             async let qTask: Void = prefetchQuotaForWidget()
-            _ = await (sTask, mTask, qTask)
+            _ = await (sTask, mTask, rTask, qTask)
+
+            // 若服务端有正在执行的任务，冷启动（划掉 App 重进）直接自动续接该会话并挂上实时 SSE
+            if await resumeActiveRunningSessionIfNeeded() {
+                syncWidgetSnapshot()
+                return
+            }
+
             currentSession = nil
             conversationId = nil
             items = []
@@ -207,6 +216,50 @@ final class AppState: ObservableObject {
             api.setToken(nil)
             isLoggedIn = false
         }
+    }
+
+    /// 划掉 App 重进或点灵动岛回跳时，自动找到服务端正在跑的会话并打开续接 SSE 流
+    @discardableResult
+    func resumeActiveRunningSessionIfNeeded() async -> Bool {
+        guard !serverRunning.isEmpty else { return false }
+        let lastSid = UserDefaults.standard.string(forKey: "agy_last_session")
+        let sortedRunning = serverRunning.values.sorted { ($0.started ?? 0) > ($1.started ?? 0) }
+
+        // 优先续接划掉 App 前正在看的那个运行中会话，其次取最新启动的运行中任务
+        let preferred: ServerRunning? = {
+            if let lastSid, !lastSid.isEmpty, lastSid != "draft",
+               let hit = sortedRunning.first(where: {
+                   $0.sessionId == lastSid || $0.conversationId == lastSid || $0.taskId == lastSid
+               }) {
+                return hit
+            }
+            return sortedRunning.first
+        }()
+
+        guard let target = preferred else { return false }
+        if let matched = matchSession(for: target) {
+            await open(matched)
+            return true
+        }
+        // 新会话刚启动还未出现在初次 /api/tasks 时，补刷一次再匹配
+        await refreshSessions()
+        if let matched = matchSession(for: target) {
+            await open(matched)
+            return true
+        }
+        return false
+    }
+
+    func matchSession(for sr: ServerRunning) -> Session? {
+        if let sid = sr.sessionId,
+           let s = sessions.first(where: { $0.id == sid || $0.conversationId == sid }) {
+            return s
+        }
+        if let cid = sr.conversationId,
+           let s = sessions.first(where: { $0.id == cid || $0.conversationId == cid }) {
+            return s
+        }
+        return sessions.first(where: { $0.latestTaskId == sr.taskId || $0.id == sr.taskId })
     }
 
     func login(_ password: String) async {
