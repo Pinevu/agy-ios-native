@@ -47,10 +47,10 @@ struct DrawerView: View {
     }
 
     private var recentActive: [Session] {
-        guard query.isEmpty && selectedGroupId == nil else { return [] }
+        guard query.isEmpty && selectedGroupId == nil && !batchMode else { return [] }
         let cutoff = Date().timeIntervalSince1970 - 3600
         return state.sessions.filter { s in
-            !s.done || state.serverRunning[s.id] != nil || state.isUnread(s) || (s.updated ?? s.started) > cutoff
+            !state.isPinned(s) && (!s.done || state.serverRunning[s.id] != nil || state.isUnread(s) || (s.updated ?? s.started) > cutoff)
         }
         .sorted { ($0.updated ?? $0.started) > ($1.updated ?? $1.started) }
         .prefix(5)
@@ -58,7 +58,10 @@ struct DrawerView: View {
     }
 
     private var pinned: [Session] { filteredSessions.filter { state.isPinned($0) } }
-    private var others: [Session] { filteredSessions.filter { !state.isPinned($0) } }
+    private var others: [Session] {
+        let recentIds = Set(recentActive.map(\.id))
+        return filteredSessions.filter { !state.isPinned($0) && !recentIds.contains($0.id) }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -87,7 +90,9 @@ struct DrawerView: View {
 
                         if !recentActive.isEmpty && !batchMode {
                             sectionHeader("⚡ 最近活跃")
-                            ForEach(recentActive) { sessionRow($0) }
+                            ForEach(recentActive) { s in
+                                sessionRow(s).id("recent-\(s.id)")
+                            }
                         }
 
                         if !pinned.isEmpty {
@@ -111,20 +116,26 @@ struct DrawerView: View {
                             .buttonStyle(.plain)
 
                             if !state.sessionMeta.collapsedPinned {
-                                ForEach(pinned) { sessionRow($0) }
+                                ForEach(pinned) { s in
+                                    sessionRow(s).id("pin-\(s.id)")
+                                }
                             }
                         }
 
-                        allSectionHeader
-                        if others.isEmpty {
-                            Text(query.isEmpty ? "还没有对话" : "没有匹配的对话")
-                                .font(.system(size: 15))
-                                .foregroundStyle(.tertiary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 22)
-                                .padding(.top, 14)
-                        } else {
-                            ForEach(others) { sessionRow($0) }
+                        if !others.isEmpty || (recentActive.isEmpty && pinned.isEmpty) {
+                            allSectionHeader
+                            if others.isEmpty {
+                                Text(query.isEmpty ? "还没有对话" : "没有匹配的对话")
+                                    .font(.system(size: 15))
+                                    .foregroundStyle(.tertiary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, 22)
+                                    .padding(.top, 14)
+                            } else {
+                                ForEach(others) { s in
+                                    sessionRow(s).id("all-\(s.id)")
+                                }
+                            }
                         }
                     }
                 }
@@ -158,7 +169,7 @@ struct DrawerView: View {
         }
         .sheet(isPresented: $showQuota) {
             QuotaSheet()
-                .presentationDetents([.medium, .large])
+                .presentationDetents([.fraction(0.72), .large])
                 .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showInstances) {
@@ -727,7 +738,7 @@ private extension Color {
     }
 }
 
-// MARK: - 配额面板
+// MARK: - 配额面板（对齐官方 antigravity.google.com Usage 环形卡片风格：含周限额 + 5h + Argon）
 
 struct QuotaSheet: View {
     @EnvironmentObject var state: AppState
@@ -741,74 +752,63 @@ struct QuotaSheet: View {
                 if loading {
                     ProgressView().padding(.top, 50)
                 } else if let q = quota {
-                    VStack(alignment: .leading, spacing: 18) {
-                        if let plan = q.plan {
+                    VStack(alignment: .leading, spacing: 16) {
+                        if let plan = q.plan, !plan.isEmpty, plan != "-" {
                             HStack(spacing: 6) {
                                 Image(systemName: "star.circle.fill")
                                     .foregroundStyle(Color.accentColor)
-                                Text(plan).font(.system(size: 14, weight: .semibold))
+                                Text(plan)
+                                    .font(.system(size: 14.5, weight: .semibold))
+                                Spacer()
+                                if let wk = q.week, (wk.calls ?? 0) > 0 {
+                                    Text("近 7 天 \(wk.calls ?? 0) 次任务")
+                                        .font(.system(size: 11.5))
+                                        .foregroundStyle(.secondary)
+                                }
                             }
+                            .padding(.horizontal, 2)
                         }
 
                         ForEach(q.groups ?? []) { g in
-                            VStack(alignment: .leading, spacing: 10) {
-                                HStack {
-                                    Text(g.name).font(.system(size: 14, weight: .semibold))
+                            VStack(alignment: .leading, spacing: 0) {
+                                HStack(alignment: .firstTextBaseline) {
+                                    Text(localizedGroupName(g.name))
+                                        .font(.system(size: 14, weight: .semibold))
+                                        .foregroundStyle(.secondary)
                                     Spacer()
-                                    if let c = g.count {
+                                    if let c = g.count, c > 0 {
                                         Text("\(c) 个模型")
                                             .font(.system(size: 11))
                                             .foregroundStyle(.tertiary)
                                     }
                                 }
+                                .padding(.horizontal, 14)
+                                .padding(.top, 12)
+                                .padding(.bottom, 8)
 
-                                ForEach(g.windows.filter { $0.remaining != nil || $0.resetAt != nil }) { w in
-                                    VStack(alignment: .leading, spacing: 5) {
-                                        HStack {
-                                            Text(w.label).font(.system(size: 12.5))
-                                            Spacer()
-                                            if let r = w.remaining {
-                                                Text("\(Int(r * 100))%")
-                                                    .font(.system(size: 12.5, weight: .semibold, design: .monospaced))
-                                                    .foregroundStyle(color(for: r))
-                                            } else {
-                                                Text("未提供")
-                                                    .font(.system(size: 12))
-                                                    .foregroundStyle(.tertiary)
-                                            }
-                                        }
-                                        if let r = w.remaining {
-                                            GeometryReader { geo in
-                                                ZStack(alignment: .leading) {
-                                                    RoundedRectangle(cornerRadius: 3)
-                                                        .fill(Color(.secondarySystemBackground))
-                                                    RoundedRectangle(cornerRadius: 3)
-                                                        .fill(color(for: r))
-                                                        .frame(width: max(2, geo.size.width * r))
-                                                }
-                                            }
-                                            .frame(height: 6)
-                                        }
-                                        if let reset = resetText(w.resetAt) {
-                                            Text(reset)
-                                                .font(.system(size: 10.5, design: .monospaced))
-                                                .foregroundStyle(.tertiary)
-                                        }
+                                let validWins = g.windows.filter { $0.remaining != nil || $0.resetAt != nil }
+                                ForEach(Array(validWins.enumerated()), id: \.element.id) { idx, w in
+                                    if idx > 0 {
+                                        Divider().opacity(0.35).padding(.leading, 14)
                                     }
+                                    quotaWindowRow(w)
+                                }
+
+                                if let desc = g.desc, !desc.isEmpty {
+                                    Text(shortGroupDesc(desc))
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(.tertiary)
+                                        .padding(.horizontal, 14)
+                                        .padding(.top, 2)
+                                        .padding(.bottom, 10)
                                 }
                             }
-                            .padding(12)
                             .background(Color(.secondarySystemGroupedBackground))
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        }
-
-                        if let wk = q.week {
-                            HStack(spacing: 14) {
-                                Label("\(wk.calls ?? 0) 次任务", systemImage: "checklist")
-                                Label("\(wk.tokens ?? 0) tok", systemImage: "text.alignleft")
-                            }
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(.secondary)
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .stroke(Color(.separator).opacity(0.22), lineWidth: 0.6)
+                            )
                         }
                     }
                     .padding(16)
@@ -819,7 +819,8 @@ struct QuotaSheet: View {
                         .padding(.top, 50)
                 }
             }
-            .navigationTitle("配额")
+            .background(Color(.systemGroupedBackground))
+            .navigationTitle("配额用量")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) { Button("完成") { dismiss() } }
@@ -836,6 +837,57 @@ struct QuotaSheet: View {
         }
     }
 
+    private func quotaWindowRow(_ w: QuotaWindow) -> some View {
+        let frac = max(0, min(1, w.remaining ?? 0))
+        let pct = Int((frac * 100).rounded())
+        let ringColor = color(for: frac)
+        return HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(w.label)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(.primary)
+                if let reset = resetText(w.resetAt), pct < 100 {
+                    Text(reset)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                } else if let reset = resetText(w.resetAt) {
+                    Text("满额 · \(reset)")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            Spacer(minLength: 8)
+            if w.remaining != nil {
+                HStack(spacing: 8) {
+                    Text("\(pct)%")
+                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(.primary)
+                    QuotaRingView(progress: frac, color: ringColor)
+                        .frame(width: 22, height: 22)
+                }
+            } else {
+                Text("未提供")
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+    }
+
+    private func localizedGroupName(_ raw: String) -> String {
+        switch raw {
+        case "Gemini Models": return "Gemini 模型"
+        case "Claude and GPT models": return "Claude 与 GPT 模型"
+        default: return raw
+        }
+    }
+
+    private func shortGroupDesc(_ raw: String) -> String {
+        raw.replacingOccurrences(of: "Models within this group: ", with: "包含模型：")
+    }
+
     private func load() async {
         if quota == nil { loading = true }
         if let q = try? await APIClient.shared.quota() {
@@ -847,7 +899,7 @@ struct QuotaSheet: View {
     }
 
     private func color(for r: Double) -> Color {
-        r < 0.2 ? .red : (r < 0.5 ? .orange : .green)
+        r < 0.2 ? .red : (r < 0.5 ? .orange : Color(red: 0.27, green: 0.68, blue: 0.32))
     }
 
     private func resetText(_ iso: String?) -> String? {
@@ -868,5 +920,21 @@ struct QuotaSheet: View {
         if days > 0 { return "\(days) 天 \(hours) 小时后重置" }
         if hours > 0 { return "\(hours) 小时 \(mins) 分后重置" }
         return "\(mins) 分钟后重置"
+    }
+}
+
+private struct QuotaRingView: View {
+    let progress: Double
+    let color: Color
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(Color(.tertiarySystemFill), lineWidth: 3)
+            Circle()
+                .trim(from: 0, to: max(0.02, min(1, progress)))
+                .stroke(color, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+        }
     }
 }

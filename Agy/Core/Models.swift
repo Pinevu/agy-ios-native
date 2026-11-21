@@ -259,6 +259,7 @@ struct QuotaResponse: Decodable {
 
 struct QuotaGroup: Decodable, Identifiable {
     let name: String
+    let desc: String?
     let count: Int?
     let windows: [QuotaWindow]
 
@@ -266,15 +267,16 @@ struct QuotaGroup: Decodable, Identifiable {
 }
 
 struct QuotaWindow: Decodable, Identifiable {
+    let window: String?
     let label: String
     let remaining: Double?
     let resetAt: String?
     let desc: String?
 
-    var id: String { label + (resetAt ?? "") }
+    var id: String { (window ?? "") + "|" + label + "|" + (resetAt ?? "") }
 
     enum CodingKeys: String, CodingKey {
-        case label, remaining, desc
+        case window, label, remaining, desc
         case resetAt = "reset_at"
     }
 }
