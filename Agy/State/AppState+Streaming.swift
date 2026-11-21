@@ -92,12 +92,29 @@ extension AppState {
 
     func appBecameActive() async {
         guard isLoggedIn else { return }
-        await syncRunning(forceCurrentRecovery: true)
+        _ = await syncRunningInternal(forceCurrentRecovery: true)
+        // 若当前会话任务已在后台完成（哪怕已超过 RECENT_DONE 窗口），切回前台无条件拉取权威回放并刷新会话列表
+        if currentServerTask == nil && currentRunningTask == nil,
+           let target = replayTargetId(
+               forSessionKey: activeSessionKey,
+               taskId: lastActiveTaskId,
+               conversationId: conversationId
+           ) {
+            await reconcileWithRetry(targetId: target, localKey: activeSessionKey)
+        }
+        Task { await refreshSessions() }
         startRunningPoller()
     }
 
     func syncRunning(forceCurrentRecovery: Bool = false) async {
-        guard let snap = try? await api.runningTasks() else { return }
+        _ = await syncRunningInternal(forceCurrentRecovery: forceCurrentRecovery)
+    }
+
+    @discardableResult
+    private func syncRunningInternal(forceCurrentRecovery: Bool = false) async -> Bool {
+        guard let snap = try? await api.runningTasks() else { return false }
+
+        let prevServerTasks = Array(serverRunning.values)
 
         // 同一会话若存在旧遗留任务与最新任务，始终保留最新启动（started 最大）的那一条，避免被旧任务覆盖
         var map: [String: ServerRunning] = [:]
@@ -135,26 +152,63 @@ extension AppState {
         }
 
         let serverTaskIds = Set(snap.running.map(\.taskId))
-        for tid in Array(running.keys) where !serverTaskIds.contains(tid) {
-            finish(taskId: tid)
+        let finishedLocalIds = Array(running.keys).filter { !serverTaskIds.contains($0) }
+        for tid in finishedLocalIds {
+            finish(taskId: tid, needsImmediateReconcile: true)
         }
 
-        if let session = currentSession, let remote = currentServerTask {
+        // 关键兜底：若上一轮在 serverRunning 里的任务本轮消失（运行中 → 已完成），即使本地未挂 SSE 也要立即回放或失效旧缓存
+        let finishedLocalSet = Set(finishedLocalIds)
+        let vanishedServer = prevServerTasks.filter {
+            !serverTaskIds.contains($0.taskId) && !finishedLocalSet.contains($0.taskId)
+        }
+        for v in vanishedServer {
+            let target = v.conversationId ?? v.sessionId ?? v.taskId
+            if matchesActiveSession(target) {
+                await reconcileWithRetry(
+                    targetId: target,
+                    localKey: activeSessionKey,
+                    expectedFinishedTaskId: v.taskId
+                )
+            } else {
+                sessionItems.removeValue(forKey: target)
+                if let sid = v.sessionId { sessionItems.removeValue(forKey: sid) }
+                reconciledTaskIds.insert(v.taskId)
+            }
+        }
+        if !vanishedServer.isEmpty {
+            Task { await refreshSessions() }
+        }
+
+        // 当前正在查看的会话（包含新建 draft 会话）有远端运行中任务时，断流/陈旧即回放自愈并重接 SSE
+        if let remote = currentServerTask {
+            let target = currentSession?.id ?? remote.conversationId ?? remote.sessionId ?? remote.taskId
             let local = running[remote.taskId]
             let last = lastStreamActivity[remote.taskId] ?? .distantPast
-            let stale = Date().timeIntervalSince(last) > 18
+            let stale = Date().timeIntervalSince(last) > 15
             if forceCurrentRecovery || local == nil || stale {
-                await reconcileRemote(sessionId: session.id, force: forceCurrentRecovery)
+                await reconcileRemote(targetId: target, localKey: activeSessionKey, force: forceCurrentRecovery)
             }
         }
 
-        let known = Set(running.values.map { $0.sessionId })
+        // 按 taskId 去重处理服务端近期完成列表（修复旧版按 sessionId 永久锁死导致第 2 轮起失效的 Bug）
         for r in snap.recent {
-            guard let sid = r.sessionId, !known.contains(sid) else { continue }
-            guard lastReconciled[sid] == nil else { continue }
-            lastReconciled[sid] = Date()
-            await reconcile(sessionId: sid)
+            guard running[r.taskId] == nil else { continue }
+            guard !reconciledTaskIds.contains(r.taskId) else { continue }
+            let target = r.conversationId ?? r.sessionId ?? r.taskId
+            if matchesActiveSession(target) {
+                await reconcileWithRetry(
+                    targetId: target,
+                    localKey: activeSessionKey,
+                    expectedFinishedTaskId: r.taskId
+                )
+            } else {
+                sessionItems.removeValue(forKey: target)
+                if let sid = r.sessionId { sessionItems.removeValue(forKey: sid) }
+                reconciledTaskIds.insert(r.taskId)
+            }
         }
+        return true
     }
 
     private func sameRunningMap(_ a: [String: ServerRunning], _ b: [String: ServerRunning]) -> Bool {
@@ -219,6 +273,7 @@ extension AppState {
                 sessionId: currentSession?.id
             )
             if let c = r.conversationId { conversationId = c }
+            lastActiveTaskId = r.id
             if let idx = items.firstIndex(where: { $0.id == bubbleId }) {
                 items[idx].taskId = r.id
             }
@@ -328,48 +383,63 @@ extension AppState {
         streamEpoch[taskId] = epoch
         lastStreamActivity[taskId] = Date()
         let task = api.stream(taskId: taskId, from: from, onActivity: { [weak self] in
-            Task { @MainActor in
-                guard self?.streamEpoch[taskId] == epoch else { return }
-                self?.lastStreamActivity[taskId] = Date()
-            }
+            guard self?.streamEpoch[taskId] == epoch else { return }
+            self?.lastStreamActivity[taskId] = Date()
         }, onEvent: { [weak self] ev in
-            Task { @MainActor in
-                guard self?.streamEpoch[taskId] == epoch else { return }
-                self?.received[taskId, default: 0] += 1
-                self?.handle(ev, taskId: taskId)
-            }
+            guard self?.streamEpoch[taskId] == epoch else { return }
+            self?.received[taskId, default: 0] += 1
+            self?.handle(ev, taskId: taskId)
         }, onClose: { [weak self] in
-            Task { @MainActor in
-                guard self?.streamEpoch[taskId] == epoch else { return }
-                await self?.streamClosed(taskId: taskId)
-            }
+            guard let self, self.streamEpoch[taskId] == epoch else { return }
+            await self.streamClosed(taskId: taskId)
         })
         running[taskId]?.stream = task
     }
 
     private func streamClosed(taskId: String) async {
         guard running[taskId] != nil else { return }
-        await syncRunning()
+        let synced = await syncRunningInternal()
         guard running[taskId] != nil else { return }
 
-        let still = serverRunning.values.contains { $0.taskId == taskId }
+        let still = !synced || serverRunning.values.contains { $0.taskId == taskId }
         if still {
             let n = (reconnects[taskId] ?? 0) + 1
             reconnects[taskId] = n
             let delay = UInt64(min(1 << min(n - 1, 3), 8)) * 1_000_000_000
             try? await Task.sleep(nanoseconds: delay)
+            guard let rt = running[taskId] else { return }
+            // 重连前先通过权威回放补齐断线期间遗漏的事件，若服务端已结束则直接落地完成态
+            if let target = replayTargetId(forSessionKey: rt.sessionId, taskId: taskId, conversationId: rt.conversationId),
+               let events = await reconcile(sessionId: target, localKey: rt.sessionId) {
+                if hasTaskEnded(events, taskId: taskId) {
+                    finish(taskId: taskId, needsImmediateReconcile: false)
+                    return
+                }
+                received[taskId] = replayedEventCount(events, taskId: taskId)
+            }
             guard running[taskId] != nil else { return }
             listen(taskId: taskId)
         } else {
             reconnects.removeValue(forKey: taskId)
-            finish(taskId: taskId)
+            finish(taskId: taskId, needsImmediateReconcile: true)
         }
     }
 
-    func finish(taskId: String) {
+    private func finalizeRunningTools(in arr: inout [ChatItem]) {
+        for i in arr.indices {
+            if case .tool(let n, let inp, let out, let sec, true) = arr[i].kind {
+                arr[i].kind = .tool(name: n, input: inp, output: out, seconds: sec, running: false)
+            }
+        }
+    }
+
+    func finish(taskId: String, needsImmediateReconcile: Bool = false) {
         guard let rt = running[taskId] else { return }
         let sid = rt.sessionId
-        if running.count <= 1 {
+        let convId = rt.conversationId
+        rt.stream?.cancel()
+
+        if running.count <= 1 && serverRunning.values.allSatisfy({ $0.taskId == taskId }) {
             LiveActivityManager.shared.end()
         }
 
@@ -385,18 +455,27 @@ extension AppState {
             taskBuffers[taskId] = b
         }
 
-        let buf = taskBuffers[taskId] ?? items
+        var buf = taskBuffers[taskId] ?? (activeSessionKey == sid ? items : [])
+        finalizeRunningTools(in: &buf)
         sessionItems[sid] = buf
+        if let convId, !convId.isEmpty { sessionItems[convId] = buf }
         if activeSessionKey == sid {
             items = buf
+            assistantIndex = nil
+            streamTick &+= 1
         }
+
         taskBuffers.removeValue(forKey: taskId)
+        pendingText.removeValue(forKey: taskId)
+        flushScheduled.remove(taskId)
         reconnects.removeValue(forKey: taskId)
         received.removeValue(forKey: taskId)
         lastStreamActivity.removeValue(forKey: taskId)
         streamEpoch.removeValue(forKey: taskId)
         running.removeValue(forKey: taskId)
+        serverRunning = serverRunning.filter { $0.value.taskId != taskId }
         lastRemoteReconcile.removeValue(forKey: sid)
+        if let convId, !convId.isEmpty { lastRemoteReconcile.removeValue(forKey: convId) }
         syncWidgetSnapshot()
 
         if let queued = pendingPrompts[sid], !queued.isEmpty {
@@ -404,26 +483,125 @@ extension AppState {
             draft = queued
             Task { await self.send() }
         }
-        Task { await refreshSessions() }
 
+        let target = replayTargetId(forSessionKey: sid, taskId: taskId, conversationId: convId)
         Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 700_000_000)
+            if !needsImmediateReconcile {
+                try? await Task.sleep(nanoseconds: 350_000_000)
+            }
             guard let self else { return }
-            guard self.running[taskId] == nil else { return }
-            await self.reconcile(sessionId: sid)
+            if let target, self.running[taskId] == nil {
+                await self.reconcileWithRetry(
+                    targetId: target,
+                    localKey: sid,
+                    expectedFinishedTaskId: taskId
+                )
+            }
+            await self.refreshSessions()
+            self.bindDraftSessionIfAvailable(conversationId: convId)
         }
     }
 
     // MARK: - 回放自愈
 
+    func replayTargetId(forSessionKey sid: String, taskId: String? = nil, conversationId cid: String? = nil) -> String? {
+        if let c = cid, !c.isEmpty { return c }
+        if !sid.isEmpty && !sid.hasPrefix("draft-") { return sid }
+        if let c = conversationId, !c.isEmpty { return c }
+        if let t = taskId, !t.isEmpty { return t }
+        if let t = lastActiveTaskId, !t.isEmpty { return t }
+        return nil
+    }
+
+    func matchesActiveSession(_ id: String, localKey: String? = nil) -> Bool {
+        if let lk = localKey, lk == activeSessionKey { return true }
+        if id == activeSessionKey { return true }
+        if let cur = currentSession, cur.id == id || cur.conversationId == id || cur.latestTaskId == id { return true }
+        if let cid = conversationId, !cid.isEmpty, cid == id { return true }
+        if let tid = lastActiveTaskId, !tid.isEmpty, tid == id { return true }
+        return false
+    }
+
+    func hasTaskEnded(_ events: [ChatEvent], taskId: String) -> Bool {
+        var inTask = false
+        for event in events {
+            if event.type == "end" && event.taskId == taskId {
+                return true
+            }
+            if event.type == "user_input" {
+                if inTask { return true }
+                inTask = event.taskId == taskId
+                continue
+            }
+            if inTask && event.type == "end" {
+                return true
+            }
+        }
+        return false
+    }
+
+    func bindDraftSessionIfAvailable(conversationId cid: String?) {
+        guard currentSession == nil else { return }
+        let targetCid = (cid?.isEmpty == false ? cid : nil) ?? conversationId
+        let targetTid = lastActiveTaskId
+        guard let matched = sessions.first(where: { s in
+            (targetCid != nil && (s.id == targetCid || s.conversationId == targetCid))
+            || (targetTid != nil && (s.latestTaskId == targetTid || s.id == targetTid))
+        }) else { return }
+        let oldDraftKey = draftSessionKey
+        currentSession = matched
+        if let mc = matched.conversationId { conversationId = mc }
+        UserDefaults.standard.set(matched.id, forKey: "agy_last_session")
+        sessionItems[matched.id] = items
+        sessionItems.removeValue(forKey: oldDraftKey)
+    }
+
+    func reconcileWithRetry(
+        targetId: String,
+        localKey: String? = nil,
+        expectedFinishedTaskId: String? = nil
+    ) async {
+        let backoffNs: [UInt64] = [0, 600_000_000, 1_400_000_000, 2_500_000_000]
+        for delay in backoffNs {
+            if delay > 0 {
+                try? await Task.sleep(nanoseconds: delay)
+            }
+            if let expTid = expectedFinishedTaskId, running[expTid] != nil {
+                return
+            }
+            if let events = await reconcile(sessionId: targetId, localKey: localKey) {
+                if let expTid = expectedFinishedTaskId {
+                    if hasTaskEnded(events, taskId: expTid) {
+                        reconciledTaskIds.insert(expTid)
+                        return
+                    }
+                    // 若服务端尚未把 end 写入磁盘，继续短暂重试
+                    continue
+                }
+                return
+            }
+        }
+    }
+
     @discardableResult
-    func reconcile(sessionId sid: String) async -> [ChatEvent]? {
+    func reconcile(sessionId sid: String, localKey: String? = nil) async -> [ChatEvent]? {
         guard let events = try? await api.replay(sid) else { return nil }
+        let isActive = matchesActiveSession(sid, localKey: localKey)
+        if isActive, conversationId == nil,
+           let foundCid = events.reversed().compactMap(\.conversationId).first(where: { !$0.isEmpty }) {
+            conversationId = foundCid
+        }
         var snapshot = buildItems(events)
-        let previous = activeSessionKey == sid ? items : (sessionItems[sid] ?? [])
+        let previous = isActive ? items : (sessionItems[sid] ?? (localKey.flatMap { sessionItems[$0] } ?? []))
         snapshot = reuseIdentity(snapshot, like: previous)
         sessionItems[sid] = snapshot
-        if activeSessionKey == sid {
+        if let lk = localKey, lk != sid {
+            sessionItems[lk] = snapshot
+        }
+        if let curId = currentSession?.id, isActive {
+            sessionItems[curId] = snapshot
+        }
+        if isActive {
             items = snapshot
             if let i = items.indices.last, case .assistant = items[i].kind {
                 assistantIndex = i
@@ -463,26 +641,40 @@ extension AppState {
             latestTool: remote.latestToolName,
             subagentCount: remote.subagentCount ?? 0
         )
+        lastActiveTaskId = remote.taskId
         taskBuffers[remote.taskId] = items
         received[remote.taskId] = receivedCount
         reconnects.removeValue(forKey: remote.taskId)
         listen(taskId: remote.taskId)
     }
 
-    private func reconcileRemote(sessionId sid: String, force: Bool = false) async {
+    private func reconcileRemote(targetId: String, localKey: String, force: Bool = false) async {
         let now = Date()
-        if !force, let last = lastRemoteReconcile[sid], now.timeIntervalSince(last) < 1.5 { return }
-        guard !remoteRecoveryInFlight.contains(sid) else { return }
-        lastRemoteReconcile[sid] = now
-        remoteRecoveryInFlight.insert(sid)
-        defer { remoteRecoveryInFlight.remove(sid) }
+        if !force, let last = lastRemoteReconcile[targetId], now.timeIntervalSince(last) < 1.5 { return }
+        guard !remoteRecoveryInFlight.contains(targetId) else { return }
+        lastRemoteReconcile[targetId] = now
+        remoteRecoveryInFlight.insert(targetId)
+        defer { remoteRecoveryInFlight.remove(targetId) }
 
-        guard let events = await reconcile(sessionId: sid),
-              currentSession?.id == sid,
+        guard let events = await reconcile(sessionId: targetId, localKey: localKey),
+              matchesActiveSession(targetId, localKey: localKey),
               let remote = currentServerTask else { return }
 
+        // 若回放中已包含该任务的 end 事件，说明它刚刚结束——绝不再重新挂回运行态
+        if hasTaskEnded(events, taskId: remote.taskId) {
+            if running[remote.taskId] != nil {
+                finish(taskId: remote.taskId, needsImmediateReconcile: false)
+            } else {
+                serverRunning = serverRunning.filter { $0.value.taskId != remote.taskId }
+                reconciledTaskIds.insert(remote.taskId)
+                syncWidgetSnapshot()
+                Task { await refreshSessions() }
+            }
+            return
+        }
+
         running[remote.taskId]?.stream?.cancel()
-        adoptRemoteTask(remote, sessionId: sid,
+        adoptRemoteTask(remote, sessionId: localKey,
                         receivedCount: replayedEventCount(events, taskId: remote.taskId),
                         replacing: true)
     }
@@ -568,6 +760,10 @@ extension AppState {
 
     private func applyToBuffer(_ ev: ChatEvent, taskId: String) {
         guard running[taskId] != nil else { return }
+        if let c = ev.conversationId, !c.isEmpty { running[taskId]?.conversationId = c }
+        if ev.type != "text", !(pendingText[taskId] ?? "").isEmpty {
+            flushText(taskId: taskId)
+        }
         var buf = taskBuffers[taskId] ?? []
         switch ev.type {
         case "text":
@@ -577,6 +773,10 @@ extension AppState {
                 } else {
                     buf.append(ChatItem(kind: .assistant(text: t)))
                 }
+            }
+        case "thought":
+            if let t = ev.text, !t.isEmpty {
+                buf.append(ChatItem(kind: .thought(text: t)))
             }
         case "tool":
             if let i = noteIndex(in: buf), case .assistant(let t) = buf[i].kind {
@@ -590,24 +790,30 @@ extension AppState {
                 buf.append(ChatItem(kind: .tool(name: n, input: ev.params ?? ev.text ?? "", output: nil, seconds: nil, running: true)))
             }
         case "tool_done":
-            if let i = buf.indices.last, case .tool(let n, let inp, _, _, _) = buf[i].kind {
-                buf[i].kind = .tool(name: n, input: inp, output: ev.output, seconds: ev.secs, running: false)
+            for i in stride(from: buf.count - 1, through: 0, by: -1) {
+                if case .tool(let n, let inp, _, _, true) = buf[i].kind {
+                    buf[i].kind = .tool(name: n, input: inp, output: ev.output, seconds: ev.secs, running: false)
+                    break
+                }
             }
         case "usage":
             if let u = ev.usage { buf.append(ChatItem(kind: .usage(text: u.summary))) }
         case "error":
-            buf.append(ChatItem(kind: .error(text: ev.text ?? "未知错误")))
+            buf.append(ChatItem(kind: .error(text: ev.error ?? ev.text ?? "未知错误")))
         case "end":
+            finalizeRunningTools(in: &buf)
             if let imgs = ev.images, !imgs.isEmpty {
                 let fresh = filterUnshownImages(imgs, in: buf)
                 if !fresh.isEmpty { buf.append(ChatItem(kind: .images(fresh), taskId: ev.taskId)) }
             }
             if let e = ev.error, !e.isEmpty { buf.append(ChatItem(kind: .error(text: e))) }
+            taskBuffers[taskId] = buf
+            finish(taskId: taskId, needsImmediateReconcile: false)
+            return
         default:
             break
         }
         taskBuffers[taskId] = buf
-        if let c = ev.conversationId, !c.isEmpty { running[taskId]?.conversationId = c }
         if let sid = running[taskId]?.sessionId { sessionItems[sid] = buf }
     }
 
@@ -680,13 +886,15 @@ extension AppState {
 
         case "end":
             assistantIndex = nil
+            finalizeRunningTools(in: &items)
             if let imgs = ev.images, !imgs.isEmpty {
                 let fresh = filterUnshownImages(imgs, in: items)
                 if !fresh.isEmpty { items.append(ChatItem(kind: .images(fresh), taskId: ev.taskId)) }
             }
             if let e = ev.error, !e.isEmpty { items.append(ChatItem(kind: .error(text: e))) }
             taskBuffers[taskId] = items
-            finish(taskId: taskId)
+            finish(taskId: taskId, needsImmediateReconcile: false)
+            return
 
         default:
             break
@@ -828,9 +1036,13 @@ extension AppState {
 
             case "end":
                 assistant = nil
+                finalizeRunningTools(in: &out)
                 if let imgs = ev.images, !imgs.isEmpty {
                     let fresh = filterUnshownImages(imgs, in: out)
                     if !fresh.isEmpty { out.append(ChatItem(kind: .images(fresh), taskId: ev.taskId)) }
+                }
+                if let e = ev.error, !e.isEmpty {
+                    out.append(ChatItem(kind: .error(text: e)))
                 }
 
             default:

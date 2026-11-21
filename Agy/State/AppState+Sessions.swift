@@ -206,6 +206,7 @@ extension AppState {
             sessionItems[cur] = items
         }
         draftSessionKey = "draft-\(UUID().uuidString)"
+        lastActiveTaskId = session.latestTaskId
         currentSession = session
         UserDefaults.standard.set(session.id, forKey: "agy_last_session")
         conversationId = session.conversationId
@@ -230,7 +231,7 @@ extension AppState {
 
         // 若会话显示未结束但本地还没拿到最新运行表，先同步一次 /api/running 再决定是否接回 SSE
         if currentServerTask == nil && !session.done {
-            await syncRunning()
+            _ = await syncRunning()
         }
 
         if let remote = currentServerTask {
@@ -242,14 +243,24 @@ extension AppState {
             }
             defer { loadingSession = nil }
             if let events = await reconcile(sessionId: session.id) {
-                adoptRemoteTask(remote, sessionId: session.id,
-                                receivedCount: replayedEventCount(events, taskId: remote.taskId))
+                if hasTaskEnded(events, taskId: remote.taskId) {
+                    serverRunning = serverRunning.filter { $0.value.taskId != remote.taskId }
+                    reconciledTaskIds.insert(remote.taskId)
+                } else {
+                    adoptRemoteTask(remote, sessionId: session.id,
+                                    receivedCount: replayedEventCount(events, taskId: remote.taskId))
+                }
             }
             return
         }
 
         if let cached = sessionItems[session.id], !cached.isEmpty {
             items = cached
+            // 秒开展示本地缓存的同时，后台静默从服务端核对最新完整回放，杜绝卡在旧缓存/未完成态
+            let sid = session.id
+            Task { @MainActor [weak self] in
+                _ = await self?.reconcile(sessionId: sid)
+            }
             return
         }
 
@@ -281,6 +292,7 @@ extension AppState {
     func newSession() {
         if let cur = currentSession?.id { sessionItems[cur] = items }
         draftSessionKey = "draft-\(UUID().uuidString)"
+        lastActiveTaskId = nil
         UserDefaults.standard.set("draft", forKey: "agy_last_session")
         currentSession = nil
         conversationId = nil

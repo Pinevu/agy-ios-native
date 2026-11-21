@@ -58,7 +58,8 @@ final class AppState: ObservableObject {
     var pendingText: [String: String] = [:]
     var flushScheduled: Set<String> = []
     var runningPoller: Task<Void, Never>?
-    var lastReconciled: [String: Date] = [:]
+    var reconciledTaskIds: Set<String> = []
+    var lastActiveTaskId: String?
     var reconnects: [String: Int] = [:]
     var received: [String: Int] = [:]
     var lastStreamActivity: [String: Date] = [:]

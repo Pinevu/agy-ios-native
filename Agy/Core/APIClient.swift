@@ -407,9 +407,9 @@ final class APIClient {
     func stream(
         taskId: String,
         from: Int = 0,
-        onActivity: @escaping () -> Void = {},
-        onEvent: @escaping (ChatEvent) -> Void,
-        onClose: @escaping () -> Void
+        onActivity: @escaping @MainActor () -> Void = {},
+        onEvent: @escaping @MainActor (ChatEvent) -> Void,
+        onClose: @escaping @MainActor () async -> Void
     ) -> Task<Void, Never>? {
         guard var comp = URLComponents(url: baseURL.appendingPathComponent("api/stream/\(taskId)"), resolvingAgainstBaseURL: false) else { return nil }
         var items: [URLQueryItem] = []
@@ -426,24 +426,27 @@ final class APIClient {
             do {
                 let (bytes, resp) = try await self.streamSession.bytes(for: req)
                 guard let http = resp as? HTTPURLResponse, http.statusCode == 200 else {
-                    onClose(); return
+                    if !Task.isCancelled { await onClose() }
+                    return
                 }
                 let lineDecoder = JSONDecoder()
                 for try await line in bytes.lines {
-                    if Task.isCancelled { break }
-                    onActivity()
+                    if Task.isCancelled { return }
+                    await onActivity()
                     guard line.hasPrefix("data:") else { continue }
                     let json = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
                     guard let data = json.data(using: .utf8) else { continue }
                     if let ev = try? lineDecoder.decode(ChatEvent.self, from: data) {
-                        onEvent(ev)
+                        await onEvent(ev)
                         if ev.type == "end" { break }
                     }
                 }
             } catch {
-                // 网络中断或取消，由上层退避重连
+                // 网络中断或取消，由上层退避重连与回放自愈
             }
-            onClose()
+            if !Task.isCancelled {
+                await onClose()
+            }
         }
     }
 }

@@ -219,11 +219,13 @@ struct RunningSnapshot: Decodable {
 struct ServerRecent: Decodable {
     let taskId: String
     let sessionId: String?
+    let conversationId: String?
     let endedAgo: Double?
 
     enum CodingKeys: String, CodingKey {
         case taskId = "task_id"
         case sessionId = "session_id"
+        case conversationId = "conversation_id"
         case endedAgo = "ended_ago"
     }
 }
