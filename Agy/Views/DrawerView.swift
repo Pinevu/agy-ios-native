@@ -824,7 +824,13 @@ struct QuotaSheet: View {
     @Environment(\.dismiss) private var dismiss
     var onClose: (() -> Void)? = nil
     @State private var quota: QuotaResponse?
-    @State private var loading = true
+    @State private var loading = false
+    @State private var refreshing = false
+    @State private var loadError: String?
+
+    private var displayedQuota: QuotaResponse? {
+        quota ?? state.lastQuotaSnapshot
+    }
 
     private func closeSelf() {
         if let onClose { onClose() } else { dismiss() }
@@ -833,9 +839,7 @@ struct QuotaSheet: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                if loading {
-                    ProgressView().padding(.top, 50)
-                } else if let q = quota {
+                if let q = displayedQuota {
                     VStack(alignment: .leading, spacing: 16) {
                         if let plan = q.plan, !plan.isEmpty, plan != "-" {
                             HStack(spacing: 6) {
@@ -895,15 +899,36 @@ struct QuotaSheet: View {
                             )
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(16)
+                } else if loading {
+                    VStack(spacing: 12) {
+                        ProgressView()
+                        Text("正在获取用量…")
+                            .font(.system(size: 13))
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 80)
                 } else {
-                    Text("配额加载失败")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
-                        .padding(.top, 50)
+                    VStack(spacing: 10) {
+                        Text(loadError ?? "用量加载失败")
+                            .font(.system(size: 13.5))
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                        Button("重试") {
+                            Task { await load(force: true) }
+                        }
+                        .font(.system(size: 14, weight: .medium))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 80)
+                    .padding(.horizontal, 24)
                 }
             }
-            .background(Color(.systemGroupedBackground))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(.systemGroupedBackground).ignoresSafeArea())
+            .refreshable { await load(force: true) }
             .navigationTitle("用量")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -920,13 +945,20 @@ struct QuotaSheet: View {
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
-                        Task { await load() }
-                    } label: { Image(systemName: "arrow.clockwise") }
+                        Task { await load(force: true) }
+                    } label: {
+                        if refreshing {
+                            ProgressView().scaleEffect(0.75)
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                    }
+                    .disabled(refreshing)
                 }
             }
-            .task { await load() }
+            .task { await load(force: false) }
             .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { _ in
-                Task { await load() }
+                Task { await load(force: false) }
             }
         }
     }
@@ -982,14 +1014,26 @@ struct QuotaSheet: View {
         raw.replacingOccurrences(of: "Models within this group: ", with: "包含模型：")
     }
 
-    private func load() async {
-        if quota == nil { loading = true }
-        if let q = try? await APIClient.shared.quota() {
+    private func load(force: Bool = false) async {
+        if displayedQuota == nil { loading = true }
+        refreshing = true
+        loadError = nil
+        defer {
+            loading = false
+            refreshing = false
+        }
+        do {
+            let q = try await APIClient.shared.quota(force: force)
             quota = q
             state.lastQuotaSnapshot = q
             state.syncWidgetSnapshot()
+        } catch {
+            if displayedQuota == nil {
+                loadError = error.localizedDescription
+            } else if force {
+                state.showToast("刷新失败：\(error.localizedDescription)")
+            }
         }
-        loading = false
     }
 
     private func color(for r: Double) -> Color {

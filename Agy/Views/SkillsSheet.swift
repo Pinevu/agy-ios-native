@@ -9,7 +9,8 @@ struct SkillsSheet: View {
     @State private var loadingInstalled = true
     @State private var loadingCatalog = false
     @State private var catalogQuery = ""
-    @State private var installingName: String?
+    @State private var installingNames: Set<String> = []
+    @State private var banner: (text: String, isError: Bool)? = nil
     @State private var selectedSkill: Skill?
     @State private var showInstaller = false
     var onClose: (() -> Void)? = nil
@@ -18,10 +19,26 @@ struct SkillsSheet: View {
         if let onClose { onClose() } else { dismiss() }
     }
 
+    private func showBanner(_ text: String, isError: Bool) {
+        withAnimation(.easeOut(duration: 0.18)) {
+            banner = (text, isError)
+        }
+        if !isError {
+            Task {
+                try? await Task.sleep(nanoseconds: 2_800_000_000)
+                if banner?.text == text {
+                    withAnimation(.easeOut(duration: 0.2)) { banner = nil }
+                }
+            }
+        }
+    }
+
     private var filteredCatalog: [SkillCatalogItem] {
         let kw = catalogQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !kw.isEmpty else { return state.skillsCatalog }
-        return state.skillsCatalog.filter { $0.name.lowercased().contains(kw) }
+        return state.skillsCatalog.filter {
+            $0.name.lowercased().contains(kw) || ($0.desc?.lowercased().contains(kw) ?? false)
+        }
     }
 
     var body: some View {
@@ -34,6 +51,33 @@ struct SkillsSheet: View {
                 .pickerStyle(.segmented)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
+
+                if let b = banner {
+                    HStack(spacing: 8) {
+                        Image(systemName: b.isError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                            .font(.system(size: 13))
+                        Text(b.text)
+                            .font(.system(size: 12.5, weight: .medium))
+                            .lineLimit(3)
+                        Spacer(minLength: 4)
+                        Button {
+                            withAnimation(.easeOut(duration: 0.15)) { banner = nil }
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 11, weight: .semibold))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .foregroundStyle(b.isError ? Color.red : Color.green)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(
+                        (b.isError ? Color.red : Color.green).opacity(0.11),
+                        in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    )
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
+                }
 
                 if tab == 0 {
                     installedList
@@ -143,6 +187,9 @@ struct SkillsSheet: View {
                         Button(role: .destructive) {
                             Task {
                                 await APIClient.shared.deleteSkill(sk.name)
+                                if let idx = state.skillsCatalog.firstIndex(where: { $0.name == sk.name }) {
+                                    state.skillsCatalog[idx].installed = false
+                                }
                                 await state.refreshSkills()
                             }
                         } label: { Label("删除", systemImage: "trash") }
@@ -182,46 +229,71 @@ struct SkillsSheet: View {
                 ProgressView("正在拉取社区目录…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if filteredCatalog.isEmpty {
-                Text(state.skillsCatalog.isEmpty ? "目录加载失败，下拉重试" : "没有匹配的技能")
-                    .font(.system(size: 14))
-                    .foregroundStyle(.tertiary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                VStack(spacing: 10) {
+                    Text(state.skillsCatalog.isEmpty ? "目录加载失败，请重试" : "没有匹配的技能")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.tertiary)
+                    if state.skillsCatalog.isEmpty {
+                        Button("重新加载") {
+                            Task {
+                                loadingCatalog = true
+                                await state.refreshSkillsCatalog(force: true)
+                                loadingCatalog = false
+                            }
+                        }
+                        .font(.system(size: 14, weight: .medium))
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List {
                     ForEach(filteredCatalog) { item in
                         HStack(spacing: 10) {
-                            VStack(alignment: .leading, spacing: 2) {
+                            VStack(alignment: .leading, spacing: 3) {
                                 Text(item.name)
-                                    .font(.system(size: 14.5, weight: .medium, design: .monospaced))
-                                Text("OpenMinis/MinisSkills")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(.tertiary)
+                                    .font(.system(size: 14.5, weight: .semibold, design: .monospaced))
+                                if let d = item.desc, !d.isEmpty {
+                                    Text(d)
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(2)
+                                } else {
+                                    Text("OpenMinis/MinisSkills")
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(.tertiary)
+                                }
                             }
-                            Spacer()
-                            if installingName == item.name {
+                            Spacer(minLength: 8)
+                            if installingNames.contains(item.name) {
                                 ProgressView().scaleEffect(0.8)
                             } else if item.installed {
                                 Label("已安装", systemImage: "checkmark.circle.fill")
                                     .font(.system(size: 12, weight: .medium))
                                     .foregroundStyle(.green)
                             } else {
-                                Button("安装") {
+                                Button {
                                     Task {
-                                        installingName = item.name
+                                        installingNames.insert(item.name)
                                         let err = await state.installSkill(name: item.name, url: item.url)
-                                        installingName = nil
-                                        if let err { state.showToast(err) }
+                                        installingNames.remove(item.name)
+                                        if let err {
+                                            showBanner("\(item.name) 安装失败：\(err)", isError: true)
+                                        } else {
+                                            showBanner("已安装 \(item.name)", isError: false)
+                                        }
                                     }
+                                } label: {
+                                    Text("安装")
+                                        .font(.system(size: 12.5, weight: .semibold))
+                                        .foregroundStyle(.white)
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 5)
+                                        .background(Color.accentColor, in: Capsule())
                                 }
-                                .font(.system(size: 12.5, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 5)
-                                .background(Color.accentColor, in: Capsule())
-                                .buttonStyle(.plain)
+                                .buttonStyle(.borderless)
                             }
                         }
-                        .padding(.vertical, 2)
+                        .padding(.vertical, 3)
                     }
                 }
                 .listStyle(.plain)
@@ -244,7 +316,9 @@ struct SkillDetailSheet: View {
         NavigationStack {
             ScrollView {
                 if loading {
-                    ProgressView().padding(.top, 60)
+                    ProgressView()
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 60)
                 } else if let d = detail {
                     VStack(alignment: .leading, spacing: 14) {
                         if let files = d.files, !files.isEmpty {

@@ -364,6 +364,7 @@ struct SkillInstallResponse: Decodable {
 
 struct SkillCatalogItem: Decodable, Identifiable, Hashable {
     let name: String
+    let desc: String?
     let url: String
     var installed: Bool
 

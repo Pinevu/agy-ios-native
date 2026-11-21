@@ -91,9 +91,15 @@ extension AppState {
         do {
             let resp = try await api.installSkill(name: name, url: url, content: content)
             if resp.ok == true {
-                await refreshSkills()
-                await refreshSkillsCatalog()
-                showToast("已安装技能 \(resp.name ?? "")")
+                let installedName = resp.name ?? name ?? ""
+                if !installedName.isEmpty,
+                   let idx = skillsCatalog.firstIndex(where: { $0.name == installedName }) {
+                    skillsCatalog[idx].installed = true
+                }
+                async let sTask: Void = refreshSkills()
+                async let cTask: Void = refreshSkillsCatalog()
+                _ = await (sTask, cTask)
+                showToast("已安装技能 \(installedName)")
                 return nil
             }
             return resp.error ?? "安装失败"

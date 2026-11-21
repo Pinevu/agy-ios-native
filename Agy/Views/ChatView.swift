@@ -234,6 +234,7 @@ struct ChatView: View {
                 }
                 .transition(.opacity)
                 .allowsHitTesting(false)
+                .zIndex(999)
             }
         }
         .animation(.easeInOut(duration: 0.2), value: state.toast)

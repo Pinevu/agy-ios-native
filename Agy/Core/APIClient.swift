@@ -247,8 +247,9 @@ final class APIClient {
         try await send("api/running", as: RunningSnapshot.self)
     }
 
-    func quota() async throws -> QuotaResponse {
-        try await send("api/quota", as: QuotaResponse.self)
+    func quota(force: Bool = false) async throws -> QuotaResponse {
+        let q = force ? [URLQueryItem(name: "force", value: "1")] : nil
+        return try await send("api/quota", queryItems: q, as: QuotaResponse.self)
     }
 
     func models() async throws -> [ModelInfo] {
