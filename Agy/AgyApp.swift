@@ -1,7 +1,15 @@
 import SwiftUI
+import UIKit
+
+final class AgyAppDelegate: NSObject, UIApplicationDelegate {
+    func applicationWillTerminate(_ application: UIApplication) {
+        LiveActivityManager.terminateAllActivitiesSync()
+    }
+}
 
 @main
 struct AgyApp: App {
+    @UIApplicationDelegateAdaptor(AgyAppDelegate.self) private var appDelegate
     @StateObject private var state = AppState()
     @StateObject private var router = DeepLinkRouter.shared
     @StateObject private var appLock = AppLockManager.shared
@@ -54,7 +62,7 @@ struct RootView: View {
         .onChange(of: scenePhase) { phase in
             if phase == .background {
                 appLock.lockIfNeeded()
-                state.syncWidgetSnapshot()
+                state.appEnteredBackground()
                 return
             }
             guard phase == .active, loaded, state.isLoggedIn else { return }

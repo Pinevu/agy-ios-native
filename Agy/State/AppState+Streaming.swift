@@ -91,6 +91,7 @@ extension AppState {
     }
 
     func appBecameActive() async {
+        endBackgroundGraceTask()
         guard isLoggedIn else { return }
         _ = await syncRunningInternal(forceCurrentRecovery: true)
         // 若当前会话任务已在后台完成（哪怕已超过 RECENT_DONE 窗口），切回前台无条件拉取权威回放并刷新会话列表
@@ -136,19 +137,22 @@ extension AppState {
 
         // 同步灵动岛（优先选最新启动的运行任务）
         if let first = map.values.sorted(by: { ($0.started ?? 0) > ($1.started ?? 0) }).first {
-            let start = first.started.map { Date(timeIntervalSince1970: $0) }
-                ?? Date().addingTimeInterval(-Double(first.elapsed ?? 0))
-            let step = first.latestToolName.map { ToolDescribe.title($0) } ?? "正在思考…"
-            let extra = max(0, (first.subagentCount ?? 0) + max(0, map.count - 1))
-            LiveActivityManager.shared.start(
-                title: (first.title?.isEmpty == false ? first.title! : "Antigravity"),
-                sessionKey: first.conversationId ?? first.sessionId ?? first.taskId,
-                step: step,
-                startedAt: start,
-                subagentCount: extra
-            )
+            if liveActivityEnabled {
+                let start = first.started.map { Date(timeIntervalSince1970: $0) }
+                    ?? Date().addingTimeInterval(-Double(first.elapsed ?? 0))
+                let step = first.latestToolName.map { ToolDescribe.title($0) } ?? "正在思考…"
+                let extra = max(0, (first.subagentCount ?? 0) + max(0, map.count - 1))
+                LiveActivityManager.shared.start(
+                    title: (first.title?.isEmpty == false ? first.title! : "Antigravity"),
+                    sessionKey: first.conversationId ?? first.sessionId ?? first.taskId,
+                    step: step,
+                    startedAt: start,
+                    subagentCount: extra
+                )
+            }
         } else if running.isEmpty {
             LiveActivityManager.shared.end()
+            endBackgroundGraceTask()
         }
 
         let serverTaskIds = Set(snap.running.map(\.taskId))
@@ -279,13 +283,15 @@ extension AppState {
             }
             let sid = activeSessionKey
             let now = Date()
-            LiveActivityManager.shared.start(
-                title: displayTitleForCurrent(fallback: text),
-                sessionKey: sid,
-                step: "正在思考…",
-                startedAt: now,
-                subagentCount: max(0, running.count)
-            )
+            if liveActivityEnabled {
+                LiveActivityManager.shared.start(
+                    title: displayTitleForCurrent(fallback: text),
+                    sessionKey: sid,
+                    step: "正在思考…",
+                    startedAt: now,
+                    subagentCount: max(0, running.count)
+                )
+            }
             running[r.id] = RunningTask(
                 taskId: r.id,
                 sessionId: sid,
@@ -441,6 +447,7 @@ extension AppState {
 
         if running.count <= 1 && serverRunning.values.allSatisfy({ $0.taskId == taskId }) {
             LiveActivityManager.shared.end()
+            endBackgroundGraceTask()
         }
 
         if !(pendingText[taskId] ?? "").isEmpty {

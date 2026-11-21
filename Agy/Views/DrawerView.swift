@@ -756,6 +756,14 @@ struct DrawerView: View {
                     Divider()
 
                     Button {
+                        state.liveActivityEnabled.toggle()
+                        state.showToast(state.liveActivityEnabled ? "已开启灵动岛" : "已关闭灵动岛")
+                    } label: {
+                        Label(state.liveActivityEnabled ? "关闭灵动岛" : "开启灵动岛",
+                              systemImage: state.liveActivityEnabled ? "capsule.inset.filled" : "capsule")
+                    }
+
+                    Button {
                         state.liveActivityPrivacyMode.toggle()
                         state.showToast(state.liveActivityPrivacyMode ? "已开启锁屏隐私模式" : "已关闭锁屏隐私模式")
                     } label: {

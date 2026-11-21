@@ -32,15 +32,17 @@ struct AgyLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: AgyActivityAttributes.self) { context in
             let s = context.state
+            let stale = context.isStale
+            let active = s.running && !stale
             HStack(spacing: 12) {
-                statusLogo(s)
+                statusLogo(s, isStale: stale)
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 5) {
                         Text(displayTitle(s))
                             .font(.system(size: 14, weight: .semibold))
                             .foregroundStyle(Color.black)
                             .lineLimit(1)
-                        if s.subagentCount > 0 && !s.privacyMode {
+                        if s.subagentCount > 0 && !s.privacyMode && active {
                             Text("+\(s.subagentCount)")
                                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                                 .foregroundStyle(.white)
@@ -51,16 +53,16 @@ struct AgyLiveActivity: Widget {
                     }
                     HStack(spacing: 5) {
                         Circle()
-                            .fill(s.running ? Color.orange : Color.green)
+                            .fill(active ? Color.orange : (stale ? Color.gray : Color.green))
                             .frame(width: 6, height: 6)
-                        Text(displayStep(s))
+                        Text(displayStep(s, isStale: stale))
                             .font(.system(size: 12))
                             .foregroundStyle(Color.black.opacity(0.62))
                             .lineLimit(1)
                     }
                 }
                 Spacer(minLength: 6)
-                timerLabel(s, color: Color.black.opacity(0.65), size: 12.5)
+                timerLabel(s, isStale: stale, compact: false, color: Color.black.opacity(0.65), size: 12.5)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
@@ -70,13 +72,15 @@ struct AgyLiveActivity: Widget {
 
         } dynamicIsland: { context in
             let s = context.state
+            let stale = context.isStale
+            let active = s.running && !stale
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    statusLogo(s)
+                    statusLogo(s, isStale: stale)
                         .padding(.leading, 4)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    timerLabel(s, color: .secondary, size: 13)
+                    timerLabel(s, isStale: stale, compact: false, color: .secondary, size: 13)
                         .padding(.trailing, 4)
                 }
                 DynamicIslandExpandedRegion(.center) {
@@ -87,14 +91,14 @@ struct AgyLiveActivity: Widget {
                 DynamicIslandExpandedRegion(.bottom) {
                     HStack(spacing: 6) {
                         Circle()
-                            .fill(s.running ? Color.orange : Color.green)
+                            .fill(active ? Color.orange : (stale ? Color.gray : Color.green))
                             .frame(width: 6, height: 6)
-                        Text(displayStep(s))
+                        Text(displayStep(s, isStale: stale))
                             .font(.system(size: 12))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                         Spacer(minLength: 4)
-                        if s.subagentCount > 0 && !s.privacyMode {
+                        if s.subagentCount > 0 && !s.privacyMode && active {
                             Text("并发 \(s.subagentCount + 1)")
                                 .font(.system(size: 10.5, weight: .medium))
                                 .foregroundStyle(.orange)
@@ -104,15 +108,15 @@ struct AgyLiveActivity: Widget {
                     .padding(.bottom, 2)
                 }
             } compactLeading: {
-                statusLogo(s)
+                statusLogo(s, isStale: stale)
             } compactTrailing: {
-                timerLabel(s, color: s.running ? .orange : .green, size: 12)
+                timerLabel(s, isStale: stale, compact: true, color: active ? .orange : (stale ? .secondary : .green), size: 12)
                     .frame(maxWidth: 44, alignment: .trailing)
             } minimal: {
-                statusLogo(s)
+                statusLogo(s, isStale: stale)
             }
             .widgetURL(deepLink(for: context.attributes.sessionKey))
-            .keylineTint(s.running ? .orange : .green)
+            .keylineTint(active ? .orange : (stale ? .gray : .green))
         }
     }
 
@@ -121,7 +125,8 @@ struct AgyLiveActivity: Widget {
         return s.title.isEmpty ? "Antigravity" : s.title
     }
 
-    private func displayStep(_ s: AgyActivityAttributes.ContentState) -> String {
+    private func displayStep(_ s: AgyActivityAttributes.ContentState, isStale: Bool) -> String {
+        if isStale && s.running { return "后台连接已断开，点按查看结果" }
         if s.privacyMode { return s.running ? "任务执行中…" : "任务已完成" }
         return s.step.isEmpty ? (s.running ? "正在思考…" : "已完成") : s.step
     }
@@ -134,13 +139,17 @@ struct AgyLiveActivity: Widget {
     }
 
     @ViewBuilder
-    private func timerLabel(_ s: AgyActivityAttributes.ContentState, color: Color, size: CGFloat) -> some View {
-        if s.running {
+    private func timerLabel(_ s: AgyActivityAttributes.ContentState, isStale: Bool, compact: Bool, color: Color, size: CGFloat) -> some View {
+        if s.running && !isStale {
             Text(s.startedAt, style: .timer)
                 .font(.system(size: size, weight: .medium, design: .monospaced))
                 .foregroundStyle(color)
                 .monospacedDigit()
                 .multilineTextAlignment(.trailing)
+        } else if s.running && isStale {
+            Text(compact ? "查看" : "点按查看")
+                .font(.system(size: max(11, size - 1), weight: .medium))
+                .foregroundStyle(color)
         } else {
             let sec = max(0, s.finalElapsed ?? Int(Date().timeIntervalSince(s.startedAt)))
             Text(formatSeconds(sec))
@@ -150,7 +159,7 @@ struct AgyLiveActivity: Widget {
     }
 
     @ViewBuilder
-    private func statusLogo(_ s: AgyActivityAttributes.ContentState) -> some View {
+    private func statusLogo(_ s: AgyActivityAttributes.ContentState, isStale: Bool) -> some View {
         Image("AppLogo")
             .resizable()
             .scaledToFit()
@@ -161,6 +170,11 @@ struct AgyLiveActivity: Widget {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.system(size: 8, weight: .bold))
                         .foregroundStyle(.green)
+                        .background(Circle().fill(.black).padding(1))
+                } else if isStale {
+                    Image(systemName: "pause.circle.fill")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.gray)
                         .background(Circle().fill(.black).padding(1))
                 }
             }

@@ -70,6 +70,7 @@ final class AppState: ObservableObject {
     var assistantIndex: Int?
     var titleMemo: [String: (stamp: Double, text: String)] = [:]
     var lastQuotaSnapshot: QuotaResponse?
+    var bgTaskId: UIBackgroundTaskIdentifier = .invalid
 
     // MARK: - 输入与跨会话草稿
     @Published var draft: String = ""
@@ -89,6 +90,16 @@ final class AppState: ObservableObject {
     @Published var appearanceMode: String =
         UserDefaults.standard.string(forKey: "agy_appearance") ?? "system" {
         didSet { UserDefaults.standard.set(appearanceMode, forKey: "agy_appearance") }
+    }
+
+    @Published var liveActivityEnabled: Bool =
+        (UserDefaults.standard.object(forKey: "agy_live_activity_enabled") as? Bool) ?? true {
+        didSet {
+            UserDefaults.standard.set(liveActivityEnabled, forKey: "agy_live_activity_enabled")
+            if !liveActivityEnabled {
+                LiveActivityManager.shared.endAllImmediately()
+            }
+        }
     }
 
     @Published var liveActivityPrivacyMode: Bool = AgySharedStore.liveActivityPrivacyMode {
@@ -193,7 +204,11 @@ final class AppState: ObservableObject {
         defer { isBooting = false }
         // 模型列表放后台刷新，不阻塞冷启动与运行中任务续接
         Task { await refreshModels() }
-        guard api.isLoggedIn else { isLoggedIn = false; return }
+        guard api.isLoggedIn else {
+            isLoggedIn = false
+            LiveActivityManager.shared.endAllImmediately()
+            return
+        }
         let ok = await api.checkSession()
         if ok {
             isLoggedIn = true
@@ -216,6 +231,7 @@ final class AppState: ObservableObject {
         } else {
             api.setToken(nil)
             isLoggedIn = false
+            LiveActivityManager.shared.endAllImmediately()
         }
     }
 
@@ -289,7 +305,30 @@ final class AppState: ObservableObject {
         currentSession = nil
         conversationId = nil
         jobs = []
+        endBackgroundGraceTask()
+        LiveActivityManager.shared.endAllImmediately()
         syncWidgetSnapshot()
+    }
+
+    /// 切到后台时，若仍有任务在跑，向系统申请短暂后台保活窗口（~25s），让短/中任务完成时可自动收起灵动岛
+    func appEnteredBackground() {
+        syncWidgetSnapshot()
+        guard isLoggedIn, runningCount > 0 else {
+            endBackgroundGraceTask()
+            return
+        }
+        guard bgTaskId == .invalid else { return }
+        bgTaskId = UIApplication.shared.beginBackgroundTask(withName: "agy-live-sync") { [weak self] in
+            Task { @MainActor in
+                self?.endBackgroundGraceTask()
+            }
+        }
+    }
+
+    func endBackgroundGraceTask() {
+        guard bgTaskId != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(bgTaskId)
+        bgTaskId = .invalid
     }
 
     func switchInstance(_ inst: Instance) async {
