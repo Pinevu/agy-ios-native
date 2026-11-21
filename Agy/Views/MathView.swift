@@ -118,7 +118,9 @@ final class KaTeXSnapshotEngine: NSObject, WKNavigationDelegate, WKScriptMessage
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.cache.removeAllObjects()
+            Task { @MainActor [weak self] in
+                self?.cache.removeAllObjects()
+            }
         }
     }
 

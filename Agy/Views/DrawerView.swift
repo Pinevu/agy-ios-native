@@ -16,8 +16,9 @@ struct SideSlideFullScreenContainer<Content: View>: View {
     @State private var dragX: CGFloat = 0
 
     var body: some View {
+        let dimOpacity = max(0.0, 0.18 * (1.0 - Double(dragX) / 360.0))
         ZStack(alignment: .leading) {
-            Color.black.opacity(max(0, 0.18 * (1 - dragX / 360)))
+            Color.black.opacity(dimOpacity)
                 .ignoresSafeArea()
                 .allowsHitTesting(false)
 
