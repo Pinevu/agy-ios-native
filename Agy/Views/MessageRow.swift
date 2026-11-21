@@ -1,11 +1,12 @@
 import SwiftUI
 import UIKit
 
-/// 一条消息能做的操作，对齐 Minis 的会话机制
+/// 一条消息能做的操作
 struct MessageActions {
     var edit: ((ChatItem) -> Void)?
     var retry: ((ChatItem) -> Void)?
     var deleteFrom: ((ChatItem) -> Void)?
+    var speak: ((ChatItem, String) -> Void)?
 
     static let none = MessageActions()
 }
@@ -15,6 +16,7 @@ struct MessageRow: View {
     /// 这条正在被流式写入：正文用 SwiftUI 渲染，保证贴底跟手
     var isLive: Bool = false
     var actions: MessageActions = .none
+    var isSpeaking: Bool = false
     /// 点按弹出的消息菜单，挂在列表外层，避免每行一个 dialog
     @Binding var assistantMenu: ChatItem?
 
@@ -27,9 +29,15 @@ struct MessageRow: View {
             noteLine(text)
 
         case .assistant(let text):
-            MarkdownView(text: text, isLive: isLive)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .textSelection(.enabled)
+            VStack(alignment: .leading, spacing: 6) {
+                MarkdownView(text: text, isLive: isLive)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+
+                if !isLive && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    assistantActionBar(text: text)
+                }
+            }
 
         case .thought(let text):
             HStack(alignment: .top, spacing: 6) {
@@ -77,7 +85,45 @@ struct MessageRow: View {
         }
     }
 
-    /// 工具前的一句说明：小字号、次要色、圆点开头，和正文拉开差距
+    private func assistantActionBar(text: String) -> some View {
+        HStack(spacing: 14) {
+            Button {
+                UIPasteboard.general.string = text
+            } label: {
+                Label("复制", systemImage: "doc.on.doc")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.tertiary)
+            }
+            .buttonStyle(.plain)
+
+            if let onSpeak = actions.speak {
+                Button {
+                    onSpeak(item, text)
+                } label: {
+                    Label(isSpeaking ? "停止" : "朗读",
+                          systemImage: isSpeaking ? "stop.circle.fill" : "speaker.wave.2")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(isSpeaking ? Color.accentColor : Color(.tertiaryLabel))
+                }
+                .buttonStyle(.plain)
+            }
+
+            Button {
+                assistantMenu = item
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                    .padding(.vertical, 2)
+                    .padding(.horizontal, 4)
+            }
+            .buttonStyle(.plain)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.top, 2)
+    }
+
     private func noteLine(_ text: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 7) {
             Circle()
@@ -90,7 +136,7 @@ struct MessageRow: View {
                 .fontWeight(.medium)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(.top, 8)
+        .padding(.top, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -150,13 +196,164 @@ struct MessageRow: View {
                                 }
                             }
                         }
-
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
     }
 }
+
+// MARK: - OpenMinis 风格连续工具折叠组
+
+struct ToolGroupView: View {
+    let items: [ChatItem]
+    let isLiveGroup: Bool
+
+    @State private var expanded = false
+
+    private var toolStats: (count: Int, runningCount: Int, totalSeconds: Double, latestName: String) {
+        var count = 0
+        var running = 0
+        var secs = 0.0
+        var latest = ""
+        for it in items {
+            if case .tool(let name, _, _, let s, let r) = it.kind {
+                count += 1
+                if r { running += 1 }
+                if let s { secs += s }
+                latest = name
+            }
+        }
+        return (count, running, secs, latest)
+    }
+
+    /// 运行中且未手动展开时，保留最近 3 个工具及其前置说明可见，折叠更早的步骤
+    private var liveSplit: (hiddenToolCount: Int, visibleItems: [ChatItem]) {
+        guard isLiveGroup, !expanded else { return (0, items) }
+        var seenTools = 0
+        var splitIdx = 0
+        for i in stride(from: items.count - 1, through: 0, by: -1) {
+            if case .tool = items[i].kind {
+                seenTools += 1
+                if seenTools == 3 {
+                    // 连同紧邻前一条 .note 一起保留
+                    if i > 0, case .note = items[i - 1].kind {
+                        splitIdx = i - 1
+                    } else {
+                        splitIdx = i
+                    }
+                    break
+                }
+            }
+        }
+        guard splitIdx > 0 else { return (0, items) }
+        let hiddenTools = items[..<splitIdx].reduce(0) { acc, it in
+            if case .tool = it.kind { return acc + 1 }
+            return acc
+        }
+        return (hiddenTools, Array(items[splitIdx...]))
+    }
+
+    var body: some View {
+        let stats = toolStats
+        VStack(alignment: .leading, spacing: 8) {
+            if !isLiveGroup && !expanded {
+                // 已完成折叠态：单行摘要胶囊
+                Button {
+                    withAnimation(.easeInOut(duration: 0.18)) { expanded = true }
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "bolt.fill")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.orange)
+                        Text("已执行 \(stats.count) 个步骤")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(.primary)
+                        if stats.totalSeconds > 0.05 {
+                            Text(String(format: "· %.1fs", stats.totalSeconds))
+                                .font(.system(size: 11.5, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 4)
+                        Text("展开")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.secondary)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 9.5, weight: .semibold))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 9)
+                    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(Color(.separator).opacity(0.28), lineWidth: 0.6)
+                    )
+                }
+                .buttonStyle(.plain)
+            } else {
+                // 运行中（折叠过早步骤）或已手动展开
+                let split = liveSplit
+                if isLiveGroup && split.hiddenToolCount > 0 {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.18)) { expanded = true }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "chevron.down.circle")
+                                .font(.system(size: 12))
+                            Text("已折叠前面 \(split.hiddenToolCount) 个步骤 · 点击展开全部")
+                                .font(.system(size: 12, weight: .medium))
+                            Spacer(minLength: 0)
+                        }
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 11)
+                        .padding(.vertical, 7)
+                        .background(Color(.secondarySystemBackground).opacity(0.75),
+                                    in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                } else if expanded {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.18)) { expanded = false }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "chevron.up")
+                                .font(.system(size: 10, weight: .semibold))
+                            Text("收起 \(stats.count) 个步骤")
+                                .font(.system(size: 12, weight: .medium))
+                            Spacer(minLength: 0)
+                        }
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 4)
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                ForEach(split.visibleItems) { child in
+                    switch child.kind {
+                    case .note(let t):
+                        HStack(alignment: .firstTextBaseline, spacing: 7) {
+                            Circle()
+                                .fill(Color.accentColor.opacity(0.85))
+                                .frame(width: 5, height: 5)
+                            Text(t)
+                                .font(.system(size: 12.5, weight: .medium))
+                                .foregroundStyle(.tertiary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(.top, 2)
+                    case .tool(let name, let input, let output, let seconds, let running):
+                        ToolCardView(name: name, input: input, output: output, seconds: seconds, running: running)
+                    default:
+                        EmptyView()
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - 单个工具调用卡片
 
 struct ToolCardView: View {
     let name: String
@@ -166,11 +363,6 @@ struct ToolCardView: View {
     let running: Bool
 
     @State private var expanded = false
-
-    private var summary: String {
-        let s = input.replacingOccurrences(of: "\n", with: " ")
-        return s.count > 90 ? String(s.prefix(90)) + "…" : s
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {

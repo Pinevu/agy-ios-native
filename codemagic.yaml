@@ -36,11 +36,14 @@ workflows:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO
 
-      - name: 打包 IPA
+      - name: 瘦身并打包 IPA
         script: |
           cd $CM_BUILD_DIR
+          rm -rf Payload
           mkdir -p Payload
           cp -r build/Build/Products/Release-iphoneos/Agy.app Payload/
+          chmod +x scripts/slim-ipa.sh
+          scripts/slim-ipa.sh Payload/Agy.app
           zip -r -9 AgyNative.ipa Payload
           ls -lh AgyNative.ipa
 

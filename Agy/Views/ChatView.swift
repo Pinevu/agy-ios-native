@@ -2,88 +2,168 @@ import SwiftUI
 import UIKit
 import PhotosUI
 
-/// 行级记忆：父视图每次重算（例如输入框每敲一个字）都会重建这些值，
-/// 但内容没变的行不该重新渲染一遍富文本 / UIKit 文本视图。这里只比内容，不比闭包。
-private struct ChatRow: View, Equatable {
-    let item: ChatItem
+// MARK: - 显示单元（支持 OpenMinis 连续工具折叠 + 行级 Equatable 记忆）
+
+private enum ChatDisplayUnit: Identifiable {
+    case single(ChatItem)
+    case toolGroup(id: UUID, items: [ChatItem], isLiveGroup: Bool)
+
+    var id: UUID {
+        switch self {
+        case .single(let item): return item.id
+        case .toolGroup(let id, _, _): return id
+        }
+    }
+}
+
+private func sameChatKind(_ a: ChatItemKind, _ b: ChatItemKind) -> Bool {
+    switch (a, b) {
+    case (.user(let t1, let at1, let p1), .user(let t2, let at2, let p2)):
+        return t1 == t2 && p1 == p2 && at1.count == at2.count
+    case (.assistant(let x), .assistant(let y)): return x == y
+    case (.note(let x), .note(let y)): return x == y
+    case (.thought(let x), .thought(let y)): return x == y
+    case (.tool(let n1, let i1, let o1, let sec1, let r1),
+          .tool(let n2, let i2, let o2, let sec2, let r2)):
+        return n1 == n2 && r1 == r2 && sec1 == sec2 && i1 == i2
+            && (o1?.count ?? -1) == (o2?.count ?? -1) && o1 == o2
+    case (.usage(let x), .usage(let y)): return x == y
+    case (.error(let x), .error(let y)): return x == y
+    case (.images(let x), .images(let y)): return x == y
+    default: return false
+    }
+}
+
+private struct ChatUnitRow: View, Equatable {
+    let unit: ChatDisplayUnit
     let isLive: Bool
+    let speakingItemId: UUID?
     let menu: ChatItem?
     let onMenu: (ChatItem?) -> Void
     let actions: MessageActions
 
-    static func == (a: ChatRow, b: ChatRow) -> Bool {
-        a.isLive == b.isLive
-            && a.item.id == b.item.id
-            && a.menu?.id == b.menu?.id
-            && sameKind(a.item.kind, b.item.kind)
-    }
-
-    private static func sameKind(_ a: ChatItemKind, _ b: ChatItemKind) -> Bool {
-        switch (a, b) {
-        case (.user(let t1, let at1, let p1), .user(let t2, let at2, let p2)):
-            // 附件是整段图片数据，比 count 足够判断有没有变化
-            return t1 == t2 && p1 == p2 && at1.count == at2.count
-        case (.assistant(let x), .assistant(let y)): return x == y
-        case (.note(let x), .note(let y)): return x == y
-        case (.thought(let x), .thought(let y)): return x == y
-        case (.tool(let n1, let i1, let o1, let sec1, let r1),
-              .tool(let n2, let i2, let o2, let sec2, let r2)):
-            return n1 == n2 && r1 == r2 && sec1 == sec2 && i1 == i2
-                && (o1?.count ?? -1) == (o2?.count ?? -1) && o1 == o2
-        case (.usage(let x), .usage(let y)): return x == y
-        case (.error(let x), .error(let y)): return x == y
-        case (.images(let x), .images(let y)): return x == y
-        default: return false
+    static func == (a: ChatUnitRow, b: ChatUnitRow) -> Bool {
+        guard a.isLive == b.isLive, a.menu?.id == b.menu?.id else { return false }
+        switch (a.unit, b.unit) {
+        case (.single(let x), .single(let y)):
+            let aSpeak = a.speakingItemId == x.id
+            let bSpeak = b.speakingItemId == y.id
+            return x.id == y.id && aSpeak == bSpeak && sameChatKind(x.kind, y.kind)
+        case (.toolGroup(let id1, let xs, let l1), .toolGroup(let id2, let ys, let l2)):
+            guard id1 == id2, l1 == l2, xs.count == ys.count else { return false }
+            for i in xs.indices {
+                if xs[i].id != ys[i].id || !sameChatKind(xs[i].kind, ys[i].kind) { return false }
+            }
+            return true
+        default:
+            return false
         }
     }
 
     var body: some View {
-        MessageRow(item: item,
-                   isLive: isLive,
-                   actions: actions,
-                   assistantMenu: Binding(get: { menu }, set: { onMenu($0) }))
+        switch unit {
+        case .single(let item):
+            MessageRow(
+                item: item,
+                isLive: isLive,
+                actions: actions,
+                isSpeaking: speakingItemId == item.id,
+                assistantMenu: Binding(get: { menu }, set: { onMenu($0) })
+            )
+        case .toolGroup(_, let groupItems, let isLiveGroup):
+            ToolGroupView(items: groupItems, isLiveGroup: isLiveGroup)
+        }
     }
 }
 
+// MARK: - 主聊天视图
+
 struct ChatView: View {
     @EnvironmentObject var state: AppState
+    @EnvironmentObject var router: DeepLinkRouter
+    @ObservedObject private var speech = SpeechManager.shared
 
     @State private var showDrawer = false
     @State private var showRunningList = false
     @State private var showBackToBottom = false
-    /// 是否钉底：用户在底部时，内容变高（图片/公式加载）自动跟随
     @State private var stickBottom = true
-    /// 上一次因 streamTick 发起的自动贴底；合并密集工具/文本事件，避免 ScrollView 连续闪动。
     @State private var lastStreamScroll = Date.distantPast
     @State private var turnCursor: Int = -1
     @State private var showModelPicker = false
     @State private var showQuota = false
+    @State private var showJobs = false
+    @State private var showSkills = false
     @State private var showAttach = false
     @State private var showPhotoPicker = false
     @State private var showFileImporter = false
     @State private var showCamera = false
-    /// 输入框草稿留在本地：它是 @Published，若直接绑 state.draft，每敲一个字都会
-    /// 让整个 ChatView（包含整张消息列表）重算一次，键盘输入必然卡。
+    @State private var showTransferSheet = false
+    @State private var exportFileURL: URL?
+
+    /// 孤立本地输入草稿，避免打字时整张消息列表重算
     @State private var input: String = ""
+    @State private var draftBeforeVoice: String = ""
     @State private var photoItems: [PhotosPickerItem] = []
-    /// 点按某条助手消息后弹出的操作菜单
     @State private var assistantMenu: ChatItem? = nil
     @State private var capturedImage: UIImage?
     @FocusState private var inputFocused: Bool
     @State private var editingItem: ChatItem?
     @State private var editingPaths: [String] = []
-    @State private var editingText = ""
+
+    /// 把连续的 {.note, .tool} 链（包含 >= 2 个工具时）自动折叠为一个稳定 ToolGroup
+    private var displayUnits: [ChatDisplayUnit] {
+        let items = state.items
+        var out: [ChatDisplayUnit] = []
+        var i = 0
+        while i < items.count {
+            if isToolOrNote(items[i].kind) {
+                var j = i
+                var toolCount = 0
+                var hasRunning = false
+                while j < items.count && isToolOrNote(items[j].kind) {
+                    if case .tool(_, _, _, _, let r) = items[j].kind {
+                        toolCount += 1
+                        if r { hasRunning = true }
+                    }
+                    j += 1
+                }
+                if toolCount >= 2 {
+                    let slice = Array(items[i..<j])
+                    let isTail = (j == items.count)
+                    let liveGroup = hasRunning || (state.isCurrentTaskRunning && isTail)
+                    out.append(.toolGroup(id: slice[0].id, items: slice, isLiveGroup: liveGroup))
+                    i = j
+                    continue
+                }
+            }
+            out.append(.single(items[i]))
+            i += 1
+        }
+        return out
+    }
+
+    private func isToolOrNote(_ kind: ChatItemKind) -> Bool {
+        switch kind {
+        case .tool, .note: return true
+        default: return false
+        }
+    }
 
     var body: some View {
         ZStack(alignment: .leading) {
             VStack(spacing: 0) {
                 header
+                if let active = activeBannerTask {
+                    activeTaskBar(active)
+                }
                 Divider().opacity(0.4)
                 messageList
+                if state.pendingUndoTransfer != nil {
+                    undoTransferBar
+                }
                 composer
             }
             .background(Color(.systemBackground).ignoresSafeArea())
-            // 从左边缘右滑 → 打开任务列表（跟 Gemini 一致）
             .simultaneousGesture(
                 DragGesture(minimumDistance: 20)
                     .onEnded { v in
@@ -98,14 +178,12 @@ struct ChatView: View {
                     }
             )
 
-            // 全屏任务列表：从左侧平滑滑入
             if showDrawer {
                 DrawerView(isPresented: $showDrawer)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(Color(.systemBackground).ignoresSafeArea())
                     .transition(.move(edge: .leading))
                     .simultaneousGesture(
-                        // 向左滑 → 关闭任务列表，回到对话
                         DragGesture(minimumDistance: 20)
                             .onEnded { v in
                                 let dx = v.translation.width
@@ -135,15 +213,42 @@ struct ChatView: View {
         }
         .animation(.easeInOut(duration: 0.2), value: state.toast)
         .animation(.easeOut(duration: 0.24), value: showDrawer)
+        .onAppear {
+            input = state.savedDraft(for: state.currentSession?.id)
+            consumePendingDeepLink()
+        }
+        .onChange(of: state.currentSession?.id) { newSid in
+            editingItem = nil
+            input = state.savedDraft(for: newSid)
+        }
+        .onChange(of: router.pending) { _ in
+            consumePendingDeepLink()
+        }
+        .onChange(of: speech.errorMessage) { err in
+            if let err, !err.isEmpty { state.showToast(err) }
+        }
         .confirmationDialog("消息", isPresented: Binding(
             get: { assistantMenu != nil },
             set: { if !$0 { assistantMenu = nil } }
         ), titleVisibility: .hidden) {
             if let item = assistantMenu {
                 Button("复制全文") {
-                    let t: String
-                    if case .assistant(let x) = item.kind { t = x } else { t = "" }
-                    UIPasteboard.general.string = t
+                    if case .assistant(let x) = item.kind {
+                        UIPasteboard.general.string = x
+                        state.showToast("已复制")
+                    }
+                }
+                Button(speech.speakingItemId == item.id ? "停止朗读" : "朗读这段") {
+                    if case .assistant(let x) = item.kind {
+                        speech.toggleSpeak(text: x, itemId: item.id)
+                    }
+                }
+                if let s = state.currentSession {
+                    Button("导出本会话 Markdown") {
+                        Task {
+                            exportFileURL = await state.exportSession(s, format: "md")
+                        }
+                    }
                 }
                 Button("重试") {
                     let it = item
@@ -159,6 +264,34 @@ struct ChatView: View {
         .sheet(isPresented: $showRunningList) { runningSheet }
         .sheet(isPresented: $showModelPicker) { modelSheet }
         .sheet(isPresented: $showQuota) { QuotaSheet() }
+        .sheet(isPresented: $showJobs) {
+            JobsSheet { sid in
+                Task { await state.openSessionById(sid) }
+            }
+        }
+        .sheet(isPresented: $showSkills) {
+            SkillsSheet()
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showTransferSheet) {
+            DraftTransferSheet(draftText: input) { target, replace in
+                let textToMove = input
+                input = ""
+                Task {
+                    await state.transferDraft(text: textToMove, to: target, replace: replace)
+                    input = state.savedDraft(for: target.id)
+                }
+            }
+        }
+        .sheet(isPresented: Binding(
+            get: { exportFileURL != nil },
+            set: { if !$0 { exportFileURL = nil } }
+        )) {
+            if let url = exportFileURL {
+                ActivityShareSheet(items: [url])
+            }
+        }
         .confirmationDialog("添加附件", isPresented: $showAttach, titleVisibility: .visible) {
             Button("拍照") { showCamera = true }
             Button("照片图库") { showPhotoPicker = true }
@@ -185,7 +318,6 @@ struct ChatView: View {
         .onChange(of: photoItems) { items in
             guard !items.isEmpty else { return }
             Task {
-                // 一次选多张：逐张读取后统一追加，最后再清空选择状态
                 for (offset, item) in items.enumerated() {
                     if let data = try? await item.loadTransferable(type: Data.self) {
                         let ts = Int(Date().timeIntervalSince1970)
@@ -198,7 +330,6 @@ struct ChatView: View {
         }
         .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             guard case .success(let urls) = result else { return }
-            // 文件也支持一次选多个；逐个读取，避免单个文件权限失败拖垮整批
             for url in urls {
                 let access = url.startAccessingSecurityScopedResource()
                 defer { if access { url.stopAccessingSecurityScopedResource() } }
@@ -210,7 +341,112 @@ struct ChatView: View {
         }
     }
 
-    // MARK: - 顶栏
+    // MARK: - DeepLink 分发
+
+    private func consumePendingDeepLink() {
+        guard state.isLoggedIn, let route = router.consume() else { return }
+        showDrawer = false
+        switch route {
+        case .open:
+            break
+        case .session(let sid):
+            Task { await state.openSessionById(sid) }
+        case .newChat(let prompt, let autoSend):
+            state.saveDraft(input, for: state.currentSession?.id)
+            state.newSession()
+            editingItem = nil
+            if let p = prompt, !p.isEmpty {
+                if autoSend {
+                    input = ""
+                    state.draft = p
+                    Task { await state.send() }
+                } else {
+                    input = p
+                    inputFocused = true
+                }
+            } else {
+                input = ""
+                inputFocused = true
+            }
+        case .voice:
+            startVoiceInput()
+        case .jobs:
+            showJobs = true
+        case .skills:
+            showSkills = true
+        case .quota:
+            showQuota = true
+        }
+    }
+
+    // MARK: - 顶栏 + 悬浮运行条
+
+    private var activeBannerTask: RunningTask? {
+        state.currentRunningTask ?? state.mergedRunning.first
+    }
+
+    private func activeTaskBar(_ rt: RunningTask) -> some View {
+        let isHere = state.currentRunningTask?.taskId == rt.taskId
+        let extraCount = max(0, rt.subagentCount + max(0, state.runningCount - 1))
+        return HStack(spacing: 8) {
+            ProgressView().scaleEffect(0.68).frame(width: 14, height: 14)
+
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 5) {
+                    Text(isHere ? "当前运行中" : (rt.title.isEmpty ? "后台运行中" : rt.title))
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    if let tool = rt.latestTool, !tool.isEmpty {
+                        Text(ToolDescribe.title(tool))
+                            .font(.system(size: 10.5, weight: .medium))
+                            .foregroundStyle(.orange)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 1)
+                            .background(Color.orange.opacity(0.14), in: Capsule())
+                    }
+                    if extraCount > 0 {
+                        Text("+\(extraCount)")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Color.orange, in: Capsule())
+                    }
+                }
+            }
+
+            Spacer(minLength: 4)
+
+            Text(rt.startedAt, style: .timer)
+                .font(.system(size: 11.5, weight: .medium, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+
+            if !isHere {
+                Button("查看") {
+                    jumpToRunning(rt)
+                }
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundStyle(Color.accentColor)
+                .buttonStyle(.plain)
+            }
+
+            Button {
+                Task { await state.stop(taskId: rt.taskId) }
+            } label: {
+                Image(systemName: "stop.fill")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 22, height: 22)
+                    .background(Color.red, in: Circle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 7)
+        .background(Color(.secondarySystemBackground).opacity(0.9))
+    }
 
     private var header: some View {
         HStack(spacing: 10) {
@@ -245,9 +481,7 @@ struct ChatView: View {
 
             Spacer(minLength: 4)
 
-            // 运行状态
             Button {
-                // 点一下刷新会话列表
                 if state.runningCount > 0 {
                     showRunningList = true
                 } else {
@@ -274,8 +508,9 @@ struct ChatView: View {
 
             headerButton("plus") {
                 dismissKeyboard()
+                state.saveDraft(input, for: state.currentSession?.id)
                 state.newSession()
-                input = ""
+                input = state.savedDraft(for: nil)
                 editingItem = nil
                 inputFocused = false
             }
@@ -286,10 +521,11 @@ struct ChatView: View {
 
             headerButton("line.3.horizontal") {
                 dismissKeyboard()
+                state.saveDraft(input, for: state.currentSession?.id)
                 withAnimation(.easeOut(duration: 0.24)) { showDrawer = true }
             }
         }
-                .padding(.horizontal, 16)
+        .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(Color(.systemBackground))
     }
@@ -319,7 +555,6 @@ struct ChatView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { inputFocused = true }
     }
 
-    /// 退出编辑态（保留还是清空输入交给调用方）
     private func cancelEditing(clearDraft: Bool = true) {
         editingItem = nil
         if clearDraft { input = "" }
@@ -339,8 +574,6 @@ struct ChatView: View {
     private var messageList: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                // 之前的白屏来自几何坐标+系统锚点互相争抢，不是懒加载本身。
-                // 单锚点方案下用回 LazyVStack：长会话只布局可见行，输入才不卡。
                 LazyVStack(alignment: .leading, spacing: 12) {
                     if state.items.isEmpty {
                         if state.loadingSession != nil {
@@ -349,14 +582,18 @@ struct ChatView: View {
                             emptyState
                         }
                     }
-                    ForEach(state.items) { item in
-                        // 只让内容真正变化的那一行重渲染；输入法打字时整表保持不动
-                        ChatRow(item: item,
-                                isLive: state.isCurrentTaskRunning && state.items.last?.id == item.id,
-                                menu: assistantMenu,
-                                onMenu: { assistantMenu = $0 },
-                                actions: rowActions)
-                            .equatable()
+                    let units = displayUnits
+                    let lastId = units.last?.id
+                    ForEach(units) { unit in
+                        ChatUnitRow(
+                            unit: unit,
+                            isLive: state.isCurrentTaskRunning && lastId == unit.id,
+                            speakingItemId: speech.speakingItemId,
+                            menu: assistantMenu,
+                            onMenu: { assistantMenu = $0 },
+                            actions: rowActions
+                        )
+                        .equatable()
                     }
                     if state.isCurrentTaskRunning {
                         HStack(spacing: 7) {
@@ -368,8 +605,6 @@ struct ChatView: View {
                         .padding(.vertical, 4)
                         .id("running")
                     }
-                    // 必须是最后一个子项：此前锚点放在运行提示前面，
-                    // scrollTo 会稳定停在“倒数第二项”，最新提示可能被挤到可视区外。
                     Color.clear
                         .frame(height: 1)
                         .id("bottom-sentinel")
@@ -378,13 +613,10 @@ struct ChatView: View {
                             stickBottom = true
                         }
                 }
-                                .padding(.horizontal, 16)
+                .padding(.horizontal, 16)
                 .padding(.top, 14)
                 .padding(.bottom, 20)
             }
-            // 手动只对 bottom-sentinel 定位；不要叠加系统默认锚点，
-            // 两个锚点在键盘改变安全区时会争抢偏移，造成可滚动的白区。
-            // 只在用户真正向上拖动后停掉跟随；不再用几何坐标猜测距底。
             .simultaneousGesture(
                 DragGesture(minimumDistance: 12)
                     .onEnded { value in
@@ -399,7 +631,6 @@ struct ChatView: View {
             .id(state.currentSession?.id ?? "draft")
             .scrollDismissesKeyboard(.immediately)
             .overlay {
-                // 会话内容还在加载时盖住列表，不让视口落在空白区
                 if state.loadingSession != nil && state.items.isEmpty {
                     loadingState
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -419,13 +650,10 @@ struct ChatView: View {
                     }
                     turnCursor = -1
                 } else if stickBottom {
-                    // 结束时「正在思考」行被移除，内容变矮，滚动位置不变就会悬在空白区
                     forceScrollToBottom(proxy)
                 }
             }
             .onChange(of: state.streamTick) { _ in
-                // 文本、工具开始、工具结束、回放补齐都统一增加 streamTick。
-                // 合并 80ms 内的多次变更，避免长任务连续 scrollTo 引发画面闪动。
                 guard stickBottom else { return }
                 let now = Date()
                 guard now.timeIntervalSince(lastStreamScroll) > 0.10 else { return }
@@ -442,15 +670,11 @@ struct ChatView: View {
                 if loading == nil { forceScrollToBottom(proxy) }
             }
             .onAppear {
-                // 冷启动直接进长会话：等布局稳定后贴底
                 forceScrollToBottom(proxy)
             }
-
         }
     }
 
-
-    /// 行操作只构造一次，避免每个可见行都新建一组闭包
     private var rowActions: MessageActions {
         MessageActions(
             edit: { openEditor(for: $0) },
@@ -462,14 +686,15 @@ struct ChatView: View {
             },
             deleteFrom: { it in
                 Task { await state.deleteFrom(itemId: it.id) }
+            },
+            speak: { it, text in
+                speech.toggleSpeak(text: text, itemId: it.id)
             }
         )
     }
 
     // MARK: - 悬浮滚动按钮
 
-    /// 强制贴底：重置滚动状态并在布局完成后的几帧重试。
-    /// 坐标/键盘的几何判断已移除；所有路径只对同一个稳定锚点定位。
     private func forceScrollToBottom(_ proxy: ScrollViewProxy, immediate: Bool = false) {
         showBackToBottom = false
         stickBottom = true
@@ -485,7 +710,6 @@ struct ChatView: View {
     private func floatingButtons(_ proxy: ScrollViewProxy) -> some View {
         if showBackToBottom {
             VStack(spacing: 8) {
-                // 到边界也保留按钮（置灰），避免「按钮忽然消失」看着像 bug
                 if !userTurns.isEmpty {
                     let canUp = prevIndex() != nil
                     Button {
@@ -542,7 +766,6 @@ struct ChatView: View {
             .overlay(Circle().stroke(Color.primary.opacity(0.10), lineWidth: 0.8))
     }
 
-    /// 所有用户消息（一轮 = 一次发送）
     private var userTurns: [(Int, ChatItem)] {
         state.items.enumerated().compactMap { idx, item in
             if case .user = item.kind { return (idx, item) }
@@ -550,13 +773,6 @@ struct ChatView: View {
         }
     }
 
-    /// 上一个起点：在底部时从「倒数第二轮」起跳（最后一轮就是眼前这条，跳它等于没动）
-    private func previousUserItem() -> (Int, ChatItem)? {
-        guard let i = prevIndex() else { return nil }
-        return userTurns[i]
-    }
-
-    /// 上一轮的下标；nil 表示已经在最早一轮
     private func prevIndex() -> Int? {
         let users = userTurns
         guard !users.isEmpty else { return nil }
@@ -565,7 +781,6 @@ struct ChatView: View {
         return start
     }
 
-    /// 下一轮的下标；nil 表示已经在最后一轮
     private func nextIndex() -> Int? {
         let users = userTurns
         guard !users.isEmpty, turnCursor >= 0 else { return nil }
@@ -574,27 +789,16 @@ struct ChatView: View {
         return start
     }
 
-    /// 下一轮；已经在底部时没有下一轮
-    private func nextUserItem() -> (Int, ChatItem)? {
-        let users = userTurns
-        guard turnCursor >= 0 else { return nil }
-        let start = turnCursor + 1
-        guard start >= 0, start < users.count else { return nil }
-        return users[start]
-    }
-
     private func dismissKeyboard() {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
                                         to: nil, from: nil, for: nil)
         inputFocused = false
     }
 
-    /// 拉取历史时的骨架，避免白屏
     private var loadingState: some View {
         VStack(spacing: 12) {
             Spacer(minLength: 120)
             ProgressView()
-                .scaleEffect(1.0)
             Text("正在载入会话…")
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
@@ -614,7 +818,7 @@ struct ChatView: View {
                 .shadow(color: .black.opacity(0.08), radius: 10, y: 2)
             Text("有什么可以帮你的？")
                 .font(.system(size: 19, weight: .semibold))
-            Text("随时提问、执行命令或分析文件")
+            Text("随时提问、语音输入、执行命令或管理定时任务")
                 .font(.system(size: 13.5))
                 .foregroundStyle(.secondary)
             Spacer(minLength: 60)
@@ -622,7 +826,43 @@ struct ChatView: View {
         .frame(maxWidth: .infinity)
     }
 
-    // MARK: - 输入栏
+    // MARK: - 撤回草稿转移条
+
+    private var undoTransferBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "arrow.uturn.backward.circle.fill")
+                .foregroundStyle(Color.accentColor)
+            Text("草稿已转移到此会话")
+                .font(.system(size: 12.5))
+            Spacer()
+            Button("撤回") {
+                if let restored = state.undoLastDraftTransfer() {
+                    input = restored
+                }
+            }
+            .font(.system(size: 12.5, weight: .semibold))
+            .foregroundStyle(Color.accentColor)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(Color.accentColor.opacity(0.09))
+    }
+
+    // MARK: - 输入栏（支持原生语音波形 + 草稿转移 + 下滑收键盘）
+
+    private func startVoiceInput() {
+        dismissKeyboard()
+        draftBeforeVoice = input
+        Task {
+            await speech.startRecording { partial in
+                if draftBeforeVoice.isEmpty {
+                    input = partial
+                } else {
+                    input = draftBeforeVoice + (draftBeforeVoice.hasSuffix(" ") ? "" : " ") + partial
+                }
+            }
+        }
+    }
 
     private var composer: some View {
         VStack(spacing: 0) {
@@ -635,9 +875,7 @@ struct ChatView: View {
                         .font(.system(size: 12.5))
                         .lineLimit(1)
                     Spacer(minLength: 6)
-                    Button {
-                        cancelEditing()
-                    } label: {
+                    Button { cancelEditing() } label: {
                         Image(systemName: "xmark.circle.fill")
                             .font(.system(size: 15))
                             .foregroundStyle(.secondary)
@@ -675,6 +913,11 @@ struct ChatView: View {
                 .padding(.vertical, 7)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.orange.opacity(0.08))
+            }
+
+            // 录音实时波形条
+            if speech.isRecording {
+                voiceWaveformBar
             }
 
             // 附件预览
@@ -716,7 +959,7 @@ struct ChatView: View {
                 }
             }
 
-            HStack(alignment: .bottom, spacing: 8) {
+            HStack(alignment: .bottom, spacing: 6) {
                 Button { showAttach = true } label: {
                     Image(systemName: "plus")
                         .font(.system(size: 19, weight: .medium))
@@ -740,18 +983,49 @@ struct ChatView: View {
                         }
                     }
 
+                // 转移草稿按钮（有文字且存在历史会话时显示）
+                if !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !state.sessions.isEmpty && editingItem == nil {
+                    Button {
+                        dismissKeyboard()
+                        showTransferSheet = true
+                    } label: {
+                        Image(systemName: "arrow.up.right.square")
+                            .font(.system(size: 16))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 28, height: 34)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("转移草稿到其它会话")
+                }
+
+                // 原生语音输入键
                 Button {
+                    if speech.isRecording {
+                        _ = speech.stopRecording()
+                    } else {
+                        startVoiceInput()
+                    }
+                } label: {
+                    Image(systemName: speech.isRecording ? "waveform.circle.fill" : "mic")
+                        .font(.system(size: speech.isRecording ? 20 : 17, weight: .medium))
+                        .foregroundStyle(speech.isRecording ? Color.red : Color.secondary)
+                        .frame(width: 30, height: 34)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("语音输入")
+
+                // 发送 / 排队 / 停止键
+                Button {
+                    if speech.isRecording { _ = speech.stopRecording() }
                     let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
                     let empty = trimmed.isEmpty && state.attachments.isEmpty
                     if empty && !state.isCurrentTaskRunning {
-                        // 空内容点发送 → 聚焦输入框，而不是一个点了没反应的灰按钮
                         inputFocused = true
                         return
                     }
                     inputFocused = false
                     Task {
                         if state.isCurrentTaskRunning && empty {
-                            // 空输入 + 运行中 = 停止
                             await state.stop()
                         } else if let editing = editingItem {
                             editingItem = nil
@@ -761,7 +1035,6 @@ struct ChatView: View {
                             editingPaths = []
                             await state.editAndResend(itemId: editing.id, newText: trimmed, keepPaths: keep)
                         } else {
-                            // 只在真正发送时写回全局草稿，避免每敲一个字整页重算
                             state.draft = input
                             input = ""
                             await state.send()
@@ -788,16 +1061,68 @@ struct ChatView: View {
                             lineWidth: inputFocused ? 1.6 : 1.2)
             )
             .shadow(color: .black.opacity(inputFocused ? 0.05 : 0.03), radius: 8, y: 2)
-                        .padding(.horizontal, 16)
+            .padding(.horizontal, 16)
             .padding(.top, 6)
             .padding(.bottom, 8)
-
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 24)
+                    .onEnded { v in
+                        if v.translation.height > 32 && abs(v.translation.height) > abs(v.translation.width) * 1.4 {
+                            dismissKeyboard()
+                        }
+                    }
+            )
         }
         .background(Color(.systemBackground))
         .overlay(alignment: .top) { Divider().opacity(0.18) }
     }
 
-    /// 运行中且有内容 = 排队追加；运行中且空 = 停止
+    private var voiceWaveformBar: some View {
+        HStack(spacing: 10) {
+            Button {
+                speech.toggleLocale()
+                startVoiceInput()
+            } label: {
+                Text(speech.shortLocaleLabel)
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color(.tertiarySystemFill), in: Capsule())
+            }
+            .buttonStyle(.plain)
+
+            HStack(alignment: .center, spacing: 2.5) {
+                ForEach(Array(speech.levels.enumerated()), id: \.offset) { _, lvl in
+                    Capsule()
+                        .fill(Color.red.opacity(0.85))
+                        .frame(width: 2.5, height: max(4, lvl * 22))
+                }
+            }
+            .frame(height: 24)
+            .frame(maxWidth: .infinity)
+            .animation(.easeOut(duration: 0.08), value: speech.levels)
+
+            Button("取消") {
+                _ = speech.stopRecording()
+                input = draftBeforeVoice
+            }
+            .font(.system(size: 12.5))
+            .foregroundStyle(.secondary)
+            .buttonStyle(.plain)
+
+            Button("完成") {
+                _ = speech.stopRecording()
+            }
+            .font(.system(size: 12.5, weight: .semibold))
+            .foregroundStyle(Color.accentColor)
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(Color.red.opacity(0.06))
+    }
+
     private var isQueueMode: Bool {
         state.isCurrentTaskRunning &&
         (!input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !state.attachments.isEmpty)
@@ -810,20 +1135,26 @@ struct ChatView: View {
         return empty ? Color(.systemGray3) : Color.accentColor
     }
 
-    // MARK: - 模型选择
+    // MARK: - 运行中弹层 & 模型弹层
 
-    /// 模型弹层高度：标题 56 + 每行 54 + 底部留白，最少 300
     private var modelSheetHeight: CGFloat {
         let rows = CGFloat(state.modelOptions.count)
         return min(56 + rows * 54 + 24, 560)
     }
 
-    /// 运行中任务列表：点一条切过去看，右侧可停止
     private var runningSheet: some View {
         NavigationStack {
             Group {
                 if state.mergedRunning.isEmpty {
-                    runningEmpty
+                    VStack(spacing: 10) {
+                        Image(systemName: "checkmark.circle")
+                            .font(.system(size: 34))
+                            .foregroundStyle(.tertiary)
+                        Text("没有正在运行的任务")
+                            .font(.system(size: 14))
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     ScrollView {
                         VStack(spacing: 0) {
@@ -843,25 +1174,11 @@ struct ChatView: View {
                 }
             }
         }
-        .presentationDetents([.height(min(120 + CGFloat(state.runningCount) * 62, 460))])
+        .presentationDetents([.height(min(120 + CGFloat(max(1, state.runningCount)) * 66, 460))])
         .presentationDragIndicator(.visible)
     }
 
-    private var runningEmpty: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "checkmark.circle")
-                .font(.system(size: 34))
-                .foregroundStyle(.tertiary)
-            Text("没有正在运行的任务")
-                .font(.system(size: 14))
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    @ViewBuilder
     private func runningRow(_ rt: RunningTask) -> some View {
-        // 整行是「切换到该会话」，右侧停止键独立，避免 Button 吞掉点击
         ZStack(alignment: .trailing) {
             Button {
                 jumpToRunning(rt)
@@ -876,15 +1193,23 @@ struct ChatView: View {
                             .font(.system(size: 14.5, weight: .medium))
                             .foregroundStyle(.primary)
                             .lineLimit(1)
-                        Text(elapsedText(rt.startedAt))
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(.tertiary)
+                        HStack(spacing: 6) {
+                            Text(rt.startedAt, style: .timer)
+                                .font(.system(size: 11.5, design: .monospaced))
+                                .foregroundStyle(.tertiary)
+                            if let tool = rt.latestTool, !tool.isEmpty {
+                                Text("· \(ToolDescribe.title(tool))")
+                                    .font(.system(size: 11.5))
+                                    .foregroundStyle(.orange)
+                                    .lineLimit(1)
+                            }
+                        }
                     }
 
                     Spacer(minLength: 44)
                 }
                 .padding(.horizontal, 18)
-                .frame(height: 62)
+                .frame(height: 64)
                 .contentShape(Rectangle())
             }
             .buttonStyle(PressableButtonStyle())
@@ -910,24 +1235,20 @@ struct ChatView: View {
 
     private func jumpToRunning(_ rt: RunningTask) {
         showRunningList = false
-        // ① 会话 id 直接命中
         if let t = state.sessions.first(where: { $0.id == rt.sessionId }) {
             Task { await state.open(t) }
             return
         }
-        // ② 新建对话发出的任务：sessionId 是 draft-xxx，用 conversationId 反查
         if let cid = rt.conversationId,
            let t = state.sessions.first(where: { $0.conversationId == cid }) {
             Task { await state.open(t) }
             return
         }
-        // ③ 再不行按标题兜底
         if !rt.title.isEmpty,
            let t = state.sessions.first(where: { state.title(of: $0) == rt.title }) {
             Task { await state.open(t) }
             return
         }
-        // ④ 会话列表可能过期，刷一次再说
         Task {
             await state.refreshSessions()
             if let t = state.sessions.first(where: { $0.conversationId == rt.conversationId }) {
@@ -936,13 +1257,6 @@ struct ChatView: View {
                 state.showToast("找不到对应会话，请下拉刷新列表")
             }
         }
-    }
-
-    private func elapsedText(_ start: Date) -> String {
-        let total = max(0, Int(Date().timeIntervalSince(start)))
-        if total < 60 { return "\(total) 秒" }
-        if total < 3600 { return "\(total / 60) 分 \(total % 60) 秒" }
-        return "\(total / 3600) 小时 \((total % 3600) / 60) 分"
     }
 
     private var modelSheet: some View {
@@ -997,5 +1311,73 @@ struct ChatView: View {
         }
         .presentationDetents([.height(modelSheetHeight)])
         .presentationDragIndicator(.visible)
+    }
+}
+
+// MARK: - 转移草稿选择器
+
+private struct DraftTransferSheet: View {
+    @EnvironmentObject var state: AppState
+    @Environment(\.dismiss) private var dismiss
+
+    let draftText: String
+    let onTransfer: (Session, Bool) -> Void
+
+    @State private var replaceExisting = false
+    @State private var query = ""
+
+    private var targets: [Session] {
+        let kw = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return state.sessions.filter { s in
+            if s.id == state.currentSession?.id { return false }
+            if kw.isEmpty { return true }
+            return state.title(of: s).lowercased().contains(kw)
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Picker("目标已有草稿时", selection: $replaceExisting) {
+                        Text("追加到末尾").tag(false)
+                        Text("替换原草稿").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                }
+
+                Section("选择目标会话") {
+                    ForEach(targets) { s in
+                        Button {
+                            dismiss()
+                            onTransfer(s, replaceExisting)
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(state.title(of: s))
+                                        .font(.system(size: 15))
+                                        .foregroundStyle(.primary)
+                                        .lineLimit(1)
+                                    Text(s.displayDate)
+                                        .font(.system(size: 11.5))
+                                        .foregroundStyle(.tertiary)
+                                }
+                                Spacer()
+                                Image(systemName: "arrow.up.right")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+            }
+            .searchable(text: $query, prompt: "筛选会话")
+            .navigationTitle("转移草稿")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+            }
+        }
+        .presentationDetents([.medium, .large])
     }
 }

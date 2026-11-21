@@ -22,20 +22,34 @@ targets:
       - path: AgyWidget/Assets.xcassets
         buildPhase: resources
       - path: Shared
+    dependencies:
+      - sdk: WidgetKit.framework
+      - sdk: ActivityKit.framework
+      - sdk: SwiftUI.framework
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.lake9674.aquila8809.widget
         PRODUCT_NAME: AgyWidget
         SWIFT_VERSION: "5.9"
+        TARGETED_DEVICE_FAMILY: "1"
+        MARKETING_VERSION: "6.0.0"
+        CURRENT_PROJECT_VERSION: "100"
         CODE_SIGN_IDENTITY: ""
         CODE_SIGNING_REQUIRED: "NO"
         CODE_SIGNING_ALLOWED: "NO"
         SKIP_INSTALL: "YES"
-        INFOPLIST_KEY_CFBundleDisplayName: Agy
+        INFOPLIST_KEY_CFBundleDisplayName: Antigravity
+        DEAD_CODE_STRIPPING: "YES"
+        STRIP_INSTALLED_PRODUCT: "YES"
+        STRIP_STYLE: "non-global"
+        DEPLOYMENT_POSTPROCESSING: "YES"
     info:
       path: AgyWidget/Info.plist
       properties:
-        CFBundleDisplayName: Agy
+        CFBundleDevelopmentRegion: zh_CN
+        CFBundleDisplayName: Antigravity
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
 
@@ -46,7 +60,10 @@ targets:
       - path: Agy
         excludes:
           - "Resources"
+          - "PrivacyInfo.xcprivacy"
       - path: Agy/Resources
+        buildPhase: resources
+      - path: Agy/PrivacyInfo.xcprivacy
         buildPhase: resources
       - path: Shared
     dependencies:
@@ -56,6 +73,11 @@ targets:
         embed: true
       - sdk: WidgetKit.framework
       - sdk: ActivityKit.framework
+      - sdk: Speech.framework
+      - sdk: AVFoundation.framework
+      - sdk: AppIntents.framework
+      - sdk: LocalAuthentication.framework
+      - sdk: Security.framework
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.lake9674.aquila8809
@@ -63,10 +85,14 @@ targets:
         INFOPLIST_FILE: Agy/Info.plist
         SWIFT_VERSION: "5.9"
         TARGETED_DEVICE_FAMILY: "1"
-        MARKETING_VERSION: "5.7.1"
-        CURRENT_PROJECT_VERSION: "94"
+        MARKETING_VERSION: "6.0.0"
+        CURRENT_PROJECT_VERSION: "100"
         CODE_SIGN_IDENTITY: ""
         CODE_SIGNING_REQUIRED: "NO"
         CODE_SIGNING_ALLOWED: "NO"
         ENABLE_BITCODE: "NO"
         SUPPORTS_MACCATALYST: "NO"
+        DEAD_CODE_STRIPPING: "YES"
+        STRIP_INSTALLED_PRODUCT: "YES"
+        STRIP_STYLE: "non-global"
+        DEPLOYMENT_POSTPROCESSING: "YES"

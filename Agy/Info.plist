@@ -20,14 +20,34 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>app.lake9674.aquila8809</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>antigravity</string>
+				<string>agy</string>
+			</array>
+		</dict>
+	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>用于拍照上传给 agy 分析与生成图片</string>
+	<string>用于拍照上传给 Antigravity 分析与生成图片</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>用于选择照片上传给 agy 分析与生成图片</string>
+	<string>用于选择照片上传给 Antigravity 分析与生成图片</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>用于把生成的图片保存到你的相册</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>用于语音输入提问与实时波形采集</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>用于将语音实时转为文字并发送给 Antigravity</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>用于启用应用锁，保护你的对话与实例凭证</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>

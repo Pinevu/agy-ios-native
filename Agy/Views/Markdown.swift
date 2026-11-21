@@ -10,6 +10,7 @@ enum MDBlock: Identifiable {
     case quote(String)
     case code(lang: String, code: String)
     case math(String)
+    case table(headers: [String], rows: [[String]])
     case rule
 
     var id: String {
@@ -21,6 +22,7 @@ enum MDBlock: Identifiable {
         case .quote(let t): return "q-\(t.hashValue)"
         case .code(let l, let c): return "c-\(l)-\(c.hashValue)"
         case .math(let t): return "m-\(t.hashValue)"
+        case .table(let h, let r): return "tbl-\(h.joined().hashValue)-\(r.count)"
         case .rule: return "hr"
         }
     }
@@ -170,6 +172,26 @@ enum MarkdownParser {
                 continue
             }
 
+            // GFM 表格（| col1 | col2 | + | --- | --- |）
+            if line.contains("|"),
+               i + 1 < lines.count,
+               Self.isTableSeparator(lines[i + 1]) {
+                flushParagraph(&para)
+                let headers = Self.splitTableRow(line)
+                i += 2
+                var rows: [[String]] = []
+                while i < lines.count {
+                    let rl = lines[i].trimmingCharacters(in: .whitespaces)
+                    if rl.isEmpty || !rl.contains("|") { break }
+                    rows.append(Self.splitTableRow(rl))
+                    i += 1
+                }
+                if !headers.isEmpty {
+                    blocks.append(.table(headers: headers, rows: rows))
+                }
+                continue
+            }
+
             // 引用
             if line.hasPrefix("> ") || line == ">" {
                 flushParagraph(&para)
@@ -252,6 +274,26 @@ enum MarkdownParser {
 
         flushParagraph(&para)
         return blocks
+    }
+
+    private static func isTableSeparator(_ raw: String) -> Bool {
+        let s = raw.trimmingCharacters(in: .whitespaces)
+        guard s.contains("|") && s.contains("-") else { return false }
+        let cells = splitTableRow(s)
+        guard !cells.isEmpty else { return false }
+        return cells.allSatisfy { cell in
+            let stripped = cell.replacingOccurrences(of: ":", with: "")
+                .replacingOccurrences(of: "-", with: "")
+                .trimmingCharacters(in: .whitespaces)
+            return stripped.isEmpty && cell.contains("-")
+        }
+    }
+
+    private static func splitTableRow(_ raw: String) -> [String] {
+        var s = raw.trimmingCharacters(in: .whitespaces)
+        if s.hasPrefix("|") { s.removeFirst() }
+        if s.hasSuffix("|") { s.removeLast() }
+        return s.components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespaces) }
     }
 }
 

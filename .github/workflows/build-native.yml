@@ -5,6 +5,9 @@ on:
     branches: [ main, master ]
     paths:
       - 'Agy/**'
+      - 'AgyWidget/**'
+      - 'Shared/**'
+      - 'scripts/**'
       - 'project.yml'
       - '.github/workflows/build-native.yml'
   workflow_dispatch:
@@ -39,12 +42,15 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
-            2>&1 | tee build.log | tail -60
+            2>&1 | tee build.log | tail -80
 
-      - name: Package IPA
+      - name: Slim & Package IPA
         run: |
+          rm -rf Payload
           mkdir -p Payload
           cp -r build/Build/Products/Release-iphoneos/Agy.app Payload/
+          chmod +x scripts/slim-ipa.sh
+          scripts/slim-ipa.sh Payload/Agy.app
           VER=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" Payload/Agy.app/Info.plist)
           BUILD=$(/usr/libexec/PlistBuddy -c "Print CFBundleVersion" Payload/Agy.app/Info.plist)
           NAME="Antigravity-${VER}-${BUILD}.ipa"

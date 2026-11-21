@@ -9,16 +9,22 @@ enum ToolDescribe {
         case "write_file": return "写入文件"
         case "edit_file", "search_replace", "str_replace": return "编辑文件"
         case "list_dir", "list_directory": return "列出目录"
-        case "grep", "search", "codebase_search": return "搜索"
-        case "web_search": return "网上搜索"
+        case "grep", "search", "codebase_search": return "搜索代码"
+        case "web_search", "search_web": return "网上搜索"
         case "browse", "web_fetch", "fetch": return "打开网页"
         case "delete_file": return "删除文件"
+        case "invoke_subagent": return "启动子代理"
+        case "define_subagent": return "定义子代理"
+        case "manage_subagents": return "管理子代理"
+        case "swarm": return "多代理协作"
+        case "run_workflow": return "运行工作流"
+        case "schedule": return "定时调度"
+        case "manage_task": return "管理后台任务"
         default:
             return name.replacingOccurrences(of: "_", with: " ")
         }
     }
 
-    /// 一句话说明。input 可能是纯命令文本，也可能是 JSON
     static func detail(name: String, input: String) -> String {
         let raw = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else { return "" }
@@ -41,16 +47,20 @@ enum ToolDescribe {
         case "grep", "search", "codebase_search":
             let q = fields["pattern"] ?? fields["query"] ?? text
             return "搜索「" + clip(q, 40) + "」"
-        case "web_search":
+        case "web_search", "search_web":
             return "搜索「" + clip(fields["query"] ?? text, 40) + "」"
         case "browse", "web_fetch", "fetch":
             return clip(fields["url"] ?? text, 48)
+        case "invoke_subagent":
+            return clip(fields["Role"] ?? fields["TypeName"] ?? text, 40)
+        case "run_workflow":
+            return clip(fields["Description"] ?? text, 48)
+        case "schedule":
+            return clip(fields["CronExpression"] ?? fields["Prompt"] ?? text, 48)
         default:
             return clip(text, 60)
         }
     }
-
-    // MARK: - 命令文本 → 一句话
 
     private static func commandDetail(_ cmd: String) -> String {
         let line = cmd.components(separatedBy: .newlines).first ?? cmd
@@ -104,7 +114,6 @@ enum ToolDescribe {
         return t.count > n ? String(t.prefix(n)) + "…" : t
     }
 
-    /// 尝试把 JSON 拆成字段；不是 JSON 就返回空
     private static func jsonFields(_ s: String) -> [String: String] {
         guard s.hasPrefix("{"), let data = s.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -117,4 +126,3 @@ enum ToolDescribe {
         return out
     }
 }
-

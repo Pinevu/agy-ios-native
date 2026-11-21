@@ -18,8 +18,9 @@ enum APIError: LocalizedError {
 }
 
 struct ErrorBody: Decodable { let error: String? }
+struct EmptyResponse: Decodable {}
 
-class APIClient {
+final class APIClient {
     static let shared = APIClient()
 
     /// 当前实例地址，可切换
@@ -39,45 +40,67 @@ class APIClient {
         cfg.waitsForConnectivity = true
         cfg.httpMaximumConnectionsPerHost = 16
         session = URLSession(configuration: cfg)
+
         let scfg = URLSessionConfiguration.default
         scfg.timeoutIntervalForRequest = 25
         scfg.timeoutIntervalForResource = 7200
         streamSession = URLSession(configuration: scfg)
+
         decoder = JSONDecoder()
         baseURLString = UserDefaults.standard.string(forKey: "agy_base_url") ?? "https://agy.nooh.cc"
-        token = UserDefaults.standard.string(forKey: Self.tokenKey(for: baseURLString))
+        token = KeychainStore.loadOrMigrateToken(for: Self.tokenKey(for: baseURLString))
     }
 
     static func tokenKey(for base: String) -> String { "agy_token::" + base }
 
+    static func hasStoredToken(for base: String) -> Bool {
+        KeychainStore.loadOrMigrateToken(for: tokenKey(for: base))?.isEmpty == false
+    }
+
     var isLoggedIn: Bool { (token?.isEmpty == false) }
 
-    /// 切到另一个实例：换地址 + 换该实例自己的令牌
+    /// 切到另一个实例：换地址 + 换该实例自己的令牌（Keychain 存储）
     func setBase(_ urlString: String) {
         let clean = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "/+$", with: "", options: .regularExpression)
         guard !clean.isEmpty else { return }
         baseURLString = clean
         UserDefaults.standard.set(clean, forKey: "agy_base_url")
-        token = UserDefaults.standard.string(forKey: Self.tokenKey(for: clean))
+        token = KeychainStore.loadOrMigrateToken(for: Self.tokenKey(for: clean))
     }
 
     func setToken(_ t: String?) {
         token = t
         let k = Self.tokenKey(for: baseURLString)
+        UserDefaults.standard.removeObject(forKey: k)
         if let t, !t.isEmpty {
-            UserDefaults.standard.set(t, forKey: k)
+            KeychainStore.save(t, account: k)
         } else {
-            UserDefaults.standard.removeObject(forKey: k)
+            KeychainStore.delete(account: k)
         }
     }
 
     // MARK: - 基础请求
 
-    private func makeRequest(_ path: String, method: String = "GET", body: Data? = nil) -> URLRequest {
-        var req = URLRequest(url: baseURL.appendingPathComponent(path))
+    private func makeRequest(
+        _ path: String,
+        queryItems: [URLQueryItem]? = nil,
+        method: String = "GET",
+        body: Data? = nil
+    ) -> URLRequest {
+        let url: URL
+        if let queryItems, !queryItems.isEmpty,
+           var comp = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false) {
+            comp.queryItems = queryItems
+            url = comp.url ?? baseURL.appendingPathComponent(path)
+        } else {
+            url = baseURL.appendingPathComponent(path)
+        }
+        var req = URLRequest(url: url)
         req.httpMethod = method
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if body != nil {
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
         if let t = token, !t.isEmpty {
             req.setValue("Bearer \(t)", forHTTPHeaderField: "Authorization")
         }
@@ -85,21 +108,35 @@ class APIClient {
         return req
     }
 
-    private func send<T: Decodable>(_ path: String, method: String = "GET", body: Data? = nil, as type: T.Type) async throws -> T {
-        let req = makeRequest(path, method: method, body: body)
+    private func sendRaw(
+        _ path: String,
+        queryItems: [URLQueryItem]? = nil,
+        method: String = "GET",
+        body: Data? = nil
+    ) async throws -> (Data, HTTPURLResponse) {
+        let req = makeRequest(path, queryItems: queryItems, method: method, body: body)
         let (data, resp) = try await session.data(for: req)
         guard let http = resp as? HTTPURLResponse else { throw APIError.server("无响应") }
         if http.statusCode == 401 {
-            // 登录接口的 401 是密码错，其它接口的 401 才是令牌过期
             if path == "api/login" { throw APIError.badPassword }
             throw APIError.unauthorized
         }
         if http.statusCode >= 400 {
-            // 服务端错误体是 {"error": "..."}，取出可读文案，不要把 JSON 原样抛给界面
             let friendly = (try? decoder.decode(ErrorBody.self, from: data))?.error
             let msg = friendly ?? String(data: data, encoding: .utf8) ?? ""
             throw APIError.server(msg.isEmpty ? "HTTP \(http.statusCode)" : msg)
         }
+        return (data, http)
+    }
+
+    private func send<T: Decodable>(
+        _ path: String,
+        queryItems: [URLQueryItem]? = nil,
+        method: String = "GET",
+        body: Data? = nil,
+        as type: T.Type
+    ) async throws -> T {
+        let (data, _) = try await sendRaw(path, queryItems: queryItems, method: method, body: body)
         do {
             return try decoder.decode(T.self, from: data)
         } catch {
@@ -129,7 +166,7 @@ class APIClient {
         }
     }
 
-    // MARK: - 会话
+    // MARK: - 会话 & 元数据 & 全文搜索 & 导出
 
     func tasks() async throws -> [Session] {
         try await send("api/tasks", as: [Session].self)
@@ -158,15 +195,54 @@ class APIClient {
         _ = try? await send("api/tasks/\(id)", method: "DELETE", as: EmptyResponse.self)
     }
 
+    func batchDeleteSessions(ids: [String]) async throws -> Int {
+        let body = try JSONSerialization.data(withJSONObject: ["ids": ids])
+        let r = try await send("api/tasks/batch-delete", method: "POST", body: body, as: BatchDeleteResponse.self)
+        return r.deleted ?? ids.count
+    }
+
     func truncateFrom(_ taskId: String) async -> Bool {
         struct Resp: Decodable { let ok: Bool?; let dropped_conversation: Bool? }
         guard let r = try? await send("api/tasks/\(taskId)/from", method: "DELETE", as: Resp.self) else { return false }
         return r.dropped_conversation == true
     }
 
-    // MARK: - 配额 / 技能
+    func getSessionsMeta() async throws -> SessionMeta {
+        try await send("api/sessions/meta", as: SessionMeta.self)
+    }
 
-    /// 服务端运行态：running = 正在跑，recent = 最近 8 秒刚结束（供补拉）
+    @discardableResult
+    func updateSessionMeta(_ payload: [String: Any]) async throws -> SessionMeta {
+        let body = try JSONSerialization.data(withJSONObject: payload)
+        let r = try await send("api/sessions/meta", method: "POST", body: body, as: SessionMetaMutationResponse.self)
+        return r.meta ?? .empty
+    }
+
+    func searchSessions(query: String, limit: Int = 30) async throws -> [SearchResultItem] {
+        let q = [
+            URLQueryItem(name: "q", value: query),
+            URLQueryItem(name: "limit", value: "\(limit)")
+        ]
+        let r = try await send("api/search", queryItems: q, as: SearchResponse.self)
+        return r.results
+    }
+
+    /// 导出会话为 Markdown 或 JSON 文件并写入临时目录供系统分享
+    func exportSessionToTempFile(sessionId: String, format: String = "md", suggestedTitle: String) async throws -> URL {
+        let q = [URLQueryItem(name: "format", value: format)]
+        let (data, _) = try await sendRaw("api/export/\(sessionId)", queryItems: q)
+        let ext = format == "json" ? "json" : "md"
+        let cleanTitle = suggestedTitle
+            .replacingOccurrences(of: #"[^\w\u4e00-\u9fff.-]+"#, with: "_", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "_"))
+        let base = cleanTitle.isEmpty ? sessionId : String(cleanTitle.prefix(40))
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(base).\(ext)")
+        try data.write(to: url, options: .atomic)
+        return url
+    }
+
+    // MARK: - 运行态 / 配额 / 模型
+
     func runningTasks() async throws -> RunningSnapshot {
         try await send("api/running", as: RunningSnapshot.self)
     }
@@ -175,19 +251,86 @@ class APIClient {
         try await send("api/quota", as: QuotaResponse.self)
     }
 
-    func skills() async throws -> [Skill] {
-        try await send("api/skills", as: [Skill].self)
-    }
-
-    /// 服务端当前账号真实可用的模型
     func models() async throws -> [ModelInfo] {
         struct Resp: Decodable { let models: [ModelInfo] }
         let r = try await send("api/models", as: Resp.self)
         return r.models
     }
 
+    // MARK: - 技能与社区市场
+
+    func skills() async throws -> [Skill] {
+        try await send("api/skills", as: [Skill].self)
+    }
+
+    func skillDetail(_ name: String) async throws -> SkillDetail {
+        let safe = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
+        return try await send("api/skills/\(safe)", as: SkillDetail.self)
+    }
+
+    func installSkill(name: String? = nil, url: String? = nil, content: String? = nil) async throws -> SkillInstallResponse {
+        var payload: [String: Any] = [:]
+        if let name, !name.isEmpty { payload["name"] = name }
+        if let url, !url.isEmpty { payload["url"] = url }
+        if let content, !content.isEmpty { payload["content"] = content }
+        let body = try JSONSerialization.data(withJSONObject: payload)
+        return try await send("api/skills/install", method: "POST", body: body, as: SkillInstallResponse.self)
+    }
+
+    func skillsCatalog(force: Bool = false) async throws -> SkillCatalogResponse {
+        let q = force ? [URLQueryItem(name: "force", value: "1")] : nil
+        return try await send("api/skills/catalog", queryItems: q, as: SkillCatalogResponse.self)
+    }
+
     func deleteSkill(_ name: String) async {
-        _ = try? await send("api/skills/\(name)", method: "DELETE", as: EmptyResponse.self)
+        let safe = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
+        _ = try? await send("api/skills/\(safe)", method: "DELETE", as: EmptyResponse.self)
+    }
+
+    // MARK: - 定时任务（Scheduled Cron Jobs）
+
+    func jobs() async throws -> [ScheduledJob] {
+        let r = try await send("api/jobs", as: JobsListResponse.self)
+        return r.jobs
+    }
+
+    func upsertJob(
+        id: String? = nil,
+        name: String,
+        cron: String,
+        prompt: String,
+        model: String?,
+        enabled: Bool = true
+    ) async throws -> ScheduledJob {
+        var payload: [String: Any] = [
+            "name": name,
+            "cron": cron,
+            "prompt": prompt,
+            "enabled": enabled,
+            "notify": true
+        ]
+        if let id, !id.isEmpty { payload["id"] = id }
+        if let model, !model.isEmpty { payload["model"] = model }
+        let body = try JSONSerialization.data(withJSONObject: payload)
+        let r = try await send("api/jobs", method: "POST", body: body, as: JobMutationResponse.self)
+        guard let job = r.job else { throw APIError.server(r.error ?? "保存定时任务失败") }
+        return job
+    }
+
+    func runJob(_ id: String) async throws -> String {
+        let r = try await send("api/jobs/\(id)/run", method: "POST", body: Data("{}".utf8), as: JobRunResponse.self)
+        guard let tid = r.taskId else { throw APIError.server(r.error ?? "触发失败") }
+        return tid
+    }
+
+    func toggleJob(_ id: String) async throws -> ScheduledJob {
+        let r = try await send("api/jobs/\(id)/toggle", method: "POST", body: Data("{}".utf8), as: JobMutationResponse.self)
+        guard let job = r.job else { throw APIError.server(r.error ?? "切换状态失败") }
+        return job
+    }
+
+    func deleteJob(_ id: String) async throws {
+        _ = try await send("api/jobs/\(id)", method: "DELETE", as: EmptyResponse.self)
     }
 
     // MARK: - 上传
@@ -201,9 +344,7 @@ class APIClient {
         return p
     }
 
-    // MARK: - 图片
-
-    private var imageCache = NSCache<NSString, UIImage>()
+    // MARK: - 图片（统一走有界 ImageCache）
 
     func imageURL(path: String, width: Int = 0) -> URL? {
         var comp = URLComponents(url: baseURL.appendingPathComponent("api/file"), resolvingAgainstBaseURL: false)
@@ -213,25 +354,23 @@ class APIClient {
         return comp?.url
     }
 
-    /// 任务产物文件：/api/files?id=<taskId>&name=<filename>
     func taskFileURL(taskId: String, name: String, width: Int = 0) -> URL? {
-        var comp = URLComponents(url: baseURL.appendingPathComponent("api/file"),
-                                 resolvingAgainstBaseURL: false)
-        var items = [URLQueryItem(name: "id", value: taskId),
-                     URLQueryItem(name: "name", value: name)]
+        var comp = URLComponents(url: baseURL.appendingPathComponent("api/file"), resolvingAgainstBaseURL: false)
+        var items = [
+            URLQueryItem(name: "id", value: taskId),
+            URLQueryItem(name: "name", value: name)
+        ]
         if width > 0 { items.append(URLQueryItem(name: "w", value: "\(width)")) }
         comp?.queryItems = items
         return comp?.url
     }
 
     func loadTaskImage(taskId: String, name: String, width: Int = 0) async -> UIImage? {
-        let key = "\(taskId)/\(name)/\(width)" as NSString
-        if let cached = imageCache.object(forKey: key) { return cached }
-        // 磁盘缓存：再次进入同一会话时直接读本地，不再重新下载
-        let file = imageDiskURL(key as String)
-        if let data = try? Data(contentsOf: file), let img = UIImage(data: data) {
-            imageCache.setObject(img, forKey: key)
-            return img
+        let cacheKey = "\(baseURLString)|\(taskId)/\(name)/\(width)"
+        if let hit = ImageCache.shared.get(key: cacheKey) { return hit }
+        if let disk = ImageCache.shared.loadFromDisk(key: cacheKey) {
+            ImageCache.shared.set(disk, forKey: cacheKey)
+            return disk
         }
         guard let url = taskFileURL(taskId: taskId, name: name, width: width) else { return nil }
         var req = URLRequest(url: url)
@@ -239,46 +378,41 @@ class APIClient {
         guard let (data, resp) = try? await session.data(for: req),
               let http = resp as? HTTPURLResponse, http.statusCode == 200,
               let img = UIImage(data: data) else { return nil }
-        imageCache.setObject(img, forKey: key)
-        try? data.write(to: file, options: .atomic)
+        ImageCache.shared.set(img, forKey: cacheKey)
+        ImageCache.shared.saveToDisk(data, forKey: cacheKey)
         return img
     }
 
-    /// 图片磁盘缓存目录，文件名用 key 的稳定哈希
-    private func imageDiskURL(_ key: String) -> URL {
-        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("agy-images", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        var h = UInt64(1469598103934665603)
-        for b in key.utf8 { h = (h ^ UInt64(b)) &* 1099511628211 }
-        return dir.appendingPathComponent(String(h, radix: 16) + ".img")
-    }
-
-    func loadImage(path: String) async -> UIImage? {
-        let key = path as NSString
-        if let cached = imageCache.object(forKey: key) { return cached }
-        guard let url = imageURL(path: path) else { return nil }
+    func loadImage(path: String, width: Int = 0) async -> UIImage? {
+        let cacheKey = "\(baseURLString)|\(path)|\(width)"
+        if let hit = ImageCache.shared.get(key: cacheKey) { return hit }
+        if let disk = ImageCache.shared.loadFromDisk(key: cacheKey) {
+            ImageCache.shared.set(disk, forKey: cacheKey)
+            return disk
+        }
+        guard let url = imageURL(path: path, width: width) else { return nil }
         var req = URLRequest(url: url)
         if let t = token { req.setValue("Bearer \(t)", forHTTPHeaderField: "Authorization") }
         guard let (data, resp) = try? await session.data(for: req),
               let http = resp as? HTTPURLResponse, http.statusCode == 200,
               let img = UIImage(data: data) else { return nil }
-        imageCache.setObject(img, forKey: key)
+        ImageCache.shared.set(img, forKey: cacheKey)
+        ImageCache.shared.saveToDisk(data, forKey: cacheKey)
         return img
     }
 
     // MARK: - SSE
 
-    /// 订阅任务事件流，逐条回调。自动处理 meta/init/text/tool/usage/end。
-    func stream(taskId: String,
-                from: Int = 0,
-                onActivity: @escaping () -> Void = {},
-                onEvent: @escaping (ChatEvent) -> Void,
-                onClose: @escaping () -> Void) -> Task<Void, Never>? {
+    func stream(
+        taskId: String,
+        from: Int = 0,
+        onActivity: @escaping () -> Void = {},
+        onEvent: @escaping (ChatEvent) -> Void,
+        onClose: @escaping () -> Void
+    ) -> Task<Void, Never>? {
         guard var comp = URLComponents(url: baseURL.appendingPathComponent("api/stream/\(taskId)"), resolvingAgainstBaseURL: false) else { return nil }
         var items: [URLQueryItem] = []
         if let t = token { items.append(URLQueryItem(name: "token", value: t)) }
-        // 从上次收到的位置续上，重连不重放已有内容
         if from > 0 { items.append(URLQueryItem(name: "from", value: "\(from)")) }
         if !items.isEmpty { comp.queryItems = items }
         guard let url = comp.url else { return nil }
@@ -289,32 +423,26 @@ class APIClient {
         return Task { [weak self] in
             guard let self else { return }
             do {
-                // 流专用会话：25 秒无数据就断开，交给重连。普通请求不受影响
                 let (bytes, resp) = try await self.streamSession.bytes(for: req)
                 guard let http = resp as? HTTPURLResponse, http.statusCode == 200 else {
                     onClose(); return
                 }
-                // 每条事件都新建 JSONDecoder() 是纯浪费：解码器本身不便宜。
-                // 一条连接复用一个实例，各连接各自持有，也不会有并发共享问题。
-                let decoder = JSONDecoder()
+                let lineDecoder = JSONDecoder()
                 for try await line in bytes.lines {
                     if Task.isCancelled { break }
-                    // data 事件和服务端 : ping 都说明这条连接还活着。
                     onActivity()
                     guard line.hasPrefix("data:") else { continue }
                     let json = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
                     guard let data = json.data(using: .utf8) else { continue }
-                    if let ev = try? decoder.decode(ChatEvent.self, from: data) {
+                    if let ev = try? lineDecoder.decode(ChatEvent.self, from: data) {
                         onEvent(ev)
                         if ev.type == "end" { break }
                     }
                 }
             } catch {
-                // 网络中断 / 取消
+                // 网络中断或取消，由上层退避重连
             }
             onClose()
         }
     }
 }
-
-struct EmptyResponse: Decodable {}

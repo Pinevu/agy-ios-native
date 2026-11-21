@@ -105,6 +105,9 @@ struct MarkdownView: View {
                     .frame(maxWidth: .infinity)
             }
 
+        case .table(let headers, let rows):
+            TableBlockView(headers: headers, rows: rows)
+
         case .rule:
             Divider().opacity(0.4).padding(.vertical, 4)
         }
@@ -498,6 +501,58 @@ struct AuthImage: View {
                     Spacer()
                 }
             }
+        }
+    }
+}
+
+// MARK: - 原生 GFM 表格渲染
+
+struct TableBlockView: View {
+    let headers: [String]
+    let rows: [[String]]
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .top, spacing: 0) {
+                    ForEach(Array(headers.enumerated()), id: \.offset) { idx, cell in
+                        Text(cell)
+                            .font(.system(size: 13.5, weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .frame(minWidth: 96, alignment: .leading)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                        if idx < headers.count - 1 {
+                            Divider().opacity(0.35)
+                        }
+                    }
+                }
+                .background(Color(.secondarySystemBackground))
+
+                ForEach(Array(rows.enumerated()), id: \.offset) { rIdx, row in
+                    Divider().opacity(0.35)
+                    HStack(alignment: .top, spacing: 0) {
+                        ForEach(0..<headers.count, id: \.self) { cIdx in
+                            let val = cIdx < row.count ? row[cIdx] : ""
+                            Text(val)
+                                .font(.system(size: 13.5))
+                                .foregroundStyle(.primary)
+                                .frame(minWidth: 96, alignment: .leading)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 7)
+                            if cIdx < headers.count - 1 {
+                                Divider().opacity(0.25)
+                            }
+                        }
+                    }
+                    .background(rIdx % 2 == 1 ? Color(.secondarySystemBackground).opacity(0.35) : Color.clear)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(Color(.separator).opacity(0.35), lineWidth: 0.6)
+            )
         }
     }
 }

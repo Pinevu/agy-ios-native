@@ -2,9 +2,11 @@ name: Swift Syntax Check
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, master ]
     paths:
       - 'Agy/**'
+      - 'AgyWidget/**'
+      - 'Shared/**'
   workflow_dispatch:
 
 jobs:
@@ -16,4 +18,4 @@ jobs:
       - name: swiftc -parse
         run: |
           docker run --rm -v "$PWD":/src -w /src swift:5.9 \
-            bash -lc 'set -e; for f in $(find Agy -name "*.swift" | sort); do echo "== $f"; swiftc -parse "$f"; done; echo ALL_PARSED_OK'
+            bash -lc 'set -e; for f in $(find Agy AgyWidget Shared -name "*.swift" | sort); do echo "== $f"; swiftc -parse "$f"; done; echo ALL_PARSED_OK'

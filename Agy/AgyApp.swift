@@ -3,43 +3,61 @@ import SwiftUI
 @main
 struct AgyApp: App {
     @StateObject private var state = AppState()
+    @StateObject private var router = DeepLinkRouter.shared
+    @StateObject private var appLock = AppLockManager.shared
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environmentObject(state)
+                .environmentObject(router)
+                .environmentObject(appLock)
                 .preferredColorScheme(state.colorScheme)
+                .onOpenURL { url in
+                    router.handle(url: url)
+                }
         }
     }
 }
 
 struct RootView: View {
     @EnvironmentObject var state: AppState
+    @EnvironmentObject var appLock: AppLockManager
     @Environment(\.scenePhase) private var scenePhase
     @State private var loaded = false
 
     var body: some View {
-        Group {
-            if state.isBooting {
-                // 校验令牌期间显示占位，避免已登录用户看到登录页一闪而过
-                splash
-            } else if state.isLoggedIn {
-                ChatView()
-            } else {
-                LoginView()
+        ZStack {
+            Group {
+                if state.isBooting {
+                    splash
+                } else if state.isLoggedIn {
+                    ChatView()
+                } else {
+                    LoginView()
+                }
+            }
+
+            if appLock.isLocked {
+                AppLockOverlay()
+                    .transition(.opacity)
+                    .zIndex(99)
             }
         }
+        .animation(.easeInOut(duration: 0.2), value: appLock.isLocked)
         .task {
             guard !loaded else { return }
             loaded = true
             await state.bootstrap()
             state.startRunningPoller()
         }
-        // 避免启动首帧的 active 回调和 bootstrap 并发，把刚建好的轮询/流又重复重接一遍。
         .onChange(of: scenePhase) { phase in
+            if phase == .background {
+                appLock.lockIfNeeded()
+                state.syncWidgetSnapshot()
+                return
+            }
             guard phase == .active, loaded, state.isLoggedIn else { return }
-            // iOS 从后台回来会冻结旧 SSE；立即重新拉运行态并恢复轮询，
-            // 不必再把 App 划掉重进才能看到正在执行的命令。
             Task { await state.appBecameActive() }
         }
     }
