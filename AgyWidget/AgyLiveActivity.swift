@@ -340,8 +340,8 @@ struct AgyQuotaWidget: Widget {
             AgyQuotaWidgetView(snapshot: entry.snapshot)
                 .agyWidgetBackground(Color(.systemBackground))
         }
-        .configurationDisplayName("配额与运行态")
-        .description("在桌面或锁屏一眼查看剩余配额")
+        .configurationDisplayName("用量与运行态")
+        .description("在桌面或锁屏一眼查看剩余用量")
         .supportedFamilies([.systemSmall, .accessoryCircular, .accessoryRectangular])
     }
 }

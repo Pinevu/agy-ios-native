@@ -12,6 +12,11 @@ struct SkillsSheet: View {
     @State private var installingName: String?
     @State private var selectedSkill: Skill?
     @State private var showInstaller = false
+    var onClose: (() -> Void)? = nil
+
+    private func closeSelf() {
+        if let onClose { onClose() } else { dismiss() }
+    }
 
     private var filteredCatalog: [SkillCatalogItem] {
         let kw = catalogQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -36,11 +41,19 @@ struct SkillsSheet: View {
                     catalogList
                 }
             }
-            .navigationTitle("技能")
+            .navigationTitle("技能商店")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("完成") { dismiss() }
+                    Button {
+                        closeSelf()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 15, weight: .semibold))
+                            Text("返回")
+                        }
+                    }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {

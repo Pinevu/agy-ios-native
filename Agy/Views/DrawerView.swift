@@ -2,11 +2,58 @@ import SwiftUI
 import UIKit
 import Combine
 
-/// 增强版侧边栏：最近活跃、可折叠置顶、自定义分组、标题/全文搜索、多选批量操作、导出与定时/技能入口
+enum FullScreenSubpage: Equatable {
+    case jobs
+    case skills
+    case usage
+}
+
+/// 原生全屏右侧滑入 + 左边缘跟手右滑返回容器
+struct SideSlideFullScreenContainer<Content: View>: View {
+    let onClose: () -> Void
+    @ViewBuilder let content: () -> Content
+
+    @State private var dragX: CGFloat = 0
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            Color.black.opacity(max(0, 0.18 * (1 - dragX / 360)))
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
+
+            content()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color(.systemBackground).ignoresSafeArea())
+                .offset(x: dragX)
+                .shadow(color: .black.opacity(dragX > 0 ? 0.16 : 0), radius: 14, x: -4)
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 18)
+                        .onChanged { v in
+                            guard v.startLocation.x < 48,
+                                  v.translation.width > 0,
+                                  abs(v.translation.width) > abs(v.translation.height) * 1.2 else { return }
+                            dragX = v.translation.width
+                        }
+                        .onEnded { v in
+                            guard dragX > 0 else { return }
+                            if v.translation.width > 88 || v.predictedEndTranslation.width > 180 {
+                                onClose()
+                            } else {
+                                withAnimation(.easeOut(duration: 0.2)) { dragX = 0 }
+                            }
+                        }
+                )
+        }
+        .transition(.move(edge: .trailing))
+    }
+}
+
+/// 增强版侧边栏：最近活跃、可折叠置顶、自定义分组、标题/全文搜索、多选批量操作、导出与侧滑全屏功能页
 struct DrawerView: View {
     @EnvironmentObject var state: AppState
     @EnvironmentObject var appLock: AppLockManager
     @Binding var isPresented: Bool
+    @Binding var subpageOpen: Bool
 
     @State private var query = ""
     @State private var showSearch = false
@@ -18,9 +65,7 @@ struct DrawerView: View {
     @State private var selectedIds: Set<String> = []
     @State private var showBatchGroupPicker = false
 
-    @State private var showJobs = false
-    @State private var showSkills = false
-    @State private var showQuota = false
+    @State private var activeSubpage: FullScreenSubpage? = nil
     @State private var showInstances = false
     @State private var showNewGroup = false
     @State private var newGroupName = ""
@@ -64,29 +109,36 @@ struct DrawerView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            if showSearch { searchBar }
-            if !state.sessionMeta.groups.isEmpty || showNewGroup {
-                groupChipsBar
-            }
+        ZStack {
+            VStack(spacing: 0) {
+                header
+                if showSearch { searchBar }
+                if !state.sessionMeta.groups.isEmpty || showNewGroup {
+                    groupChipsBar
+                }
 
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    if fullTextMode && !query.trimmingCharacters(in: .whitespaces).isEmpty {
-                        fullTextResultList
-                    } else {
-                        if !batchMode {
-                            menuRow("发起新对话", icon: "square.and.pencil") {
-                                state.newSession()
-                                isPresented = false
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        if fullTextMode && !query.trimmingCharacters(in: .whitespaces).isEmpty {
+                            fullTextResultList
+                        } else {
+                            if !batchMode {
+                                menuRow("发起新对话", icon: "square.and.pencil") {
+                                    state.newSession()
+                                    isPresented = false
+                                }
+                                menuRow("定时任务", icon: "clock.badge.checkmark",
+                                        badge: state.jobs.isEmpty ? nil : "\(state.jobs.count)",
+                                        chevron: true) {
+                                    openSubpage(.jobs)
+                                }
+                                menuRow("技能商店", icon: "square.grid.2x2", chevron: true) {
+                                    openSubpage(.skills)
+                                }
+                                menuRow("用量", icon: "gauge.with.needle", chevron: true) {
+                                    openSubpage(.usage)
+                                }
                             }
-                            menuRow("定时任务", icon: "clock.badge.checkmark", badge: state.jobs.isEmpty ? nil : "\(state.jobs.count)") {
-                                showJobs = true
-                            }
-                            menuRow("技能商店", icon: "square.grid.2x2") { showSkills = true }
-                            menuRow("配额", icon: "gauge.with.needle") { showQuota = true }
-                        }
 
                         if !recentActive.isEmpty && !batchMode {
                             sectionHeader("⚡ 最近活跃")
@@ -154,23 +206,31 @@ struct DrawerView: View {
         .overlay(alignment: .leading) {
             Rectangle().fill(Color(.separator).opacity(0.3)).frame(width: 0.5)
         }
-        .sheet(isPresented: $showJobs) {
-            JobsSheet { sid in
-                Task { await state.openSessionById(sid) }
-                isPresented = false
+
+            if let page = activeSubpage {
+                SideSlideFullScreenContainer(onClose: closeSubpage) {
+                    switch page {
+                    case .jobs:
+                        JobsSheet(onClose: closeSubpage) { sid in
+                            closeSubpage()
+                            Task { await state.openSessionById(sid) }
+                            isPresented = false
+                        }
+                    case .skills:
+                        SkillsSheet(onClose: closeSubpage)
+                    case .usage:
+                        QuotaSheet(onClose: closeSubpage)
+                    }
+                }
+                .zIndex(10)
             }
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
         }
-        .sheet(isPresented: $showSkills) {
-            SkillsSheet()
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
+        .animation(.easeOut(duration: 0.25), value: activeSubpage)
+        .onChange(of: activeSubpage) { p in
+            subpageOpen = (p != nil)
         }
-        .sheet(isPresented: $showQuota) {
-            QuotaSheet()
-                .presentationDetents([.fraction(0.72), .large])
-                .presentationDragIndicator(.visible)
+        .onDisappear {
+            subpageOpen = false
         }
         .sheet(isPresented: $showInstances) {
             InstancesSheet()
@@ -427,9 +487,22 @@ struct DrawerView: View {
         }
     }
 
+    private func openSubpage(_ page: FullScreenSubpage) {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        withAnimation(.easeOut(duration: 0.26)) {
+            activeSubpage = page
+        }
+    }
+
+    private func closeSubpage() {
+        withAnimation(.easeIn(duration: 0.22)) {
+            activeSubpage = nil
+        }
+    }
+
     // MARK: - 常规行与会话行
 
-    private func menuRow(_ title: String, icon: String, badge: String? = nil, action: @escaping () -> Void) -> some View {
+    private func menuRow(_ title: String, icon: String, badge: String? = nil, chevron: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 16) {
                 Image(systemName: icon)
@@ -445,6 +518,11 @@ struct DrawerView: View {
                         .padding(.horizontal, 7)
                         .padding(.vertical, 2)
                         .background(Color(.secondarySystemBackground), in: Capsule())
+                }
+                if chevron {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.tertiary)
                 }
             }
             .foregroundStyle(.primary)
@@ -743,8 +821,13 @@ private extension Color {
 struct QuotaSheet: View {
     @EnvironmentObject var state: AppState
     @Environment(\.dismiss) private var dismiss
+    var onClose: (() -> Void)? = nil
     @State private var quota: QuotaResponse?
     @State private var loading = true
+
+    private func closeSelf() {
+        if let onClose { onClose() } else { dismiss() }
+    }
 
     var body: some View {
         NavigationStack {
@@ -820,11 +903,21 @@ struct QuotaSheet: View {
                 }
             }
             .background(Color(.systemGroupedBackground))
-            .navigationTitle("配额用量")
+            .navigationTitle("用量")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) { Button("完成") { dismiss() } }
                 ToolbarItem(placement: .navigationBarLeading) {
+                    Button {
+                        closeSelf()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 15, weight: .semibold))
+                            Text("返回")
+                        }
+                    }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
                         Task { await load() }
                     } label: { Image(systemName: "arrow.clockwise") }

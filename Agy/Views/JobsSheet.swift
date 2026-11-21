@@ -7,7 +7,12 @@ struct JobsSheet: View {
 
     @State private var editingJob: ScheduledJob?
     @State private var showCreate = false
+    var onClose: (() -> Void)? = nil
     var onOpenSession: ((String) -> Void)?
+
+    private func closeSelf() {
+        if let onClose { onClose() } else { dismiss() }
+    }
 
     var body: some View {
         NavigationStack {
@@ -40,7 +45,15 @@ struct JobsSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("完成") { dismiss() }
+                    Button {
+                        closeSelf()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 15, weight: .semibold))
+                            Text("返回")
+                        }
+                    }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
@@ -126,7 +139,7 @@ struct JobsSheet: View {
 
                 if let tid = job.lastTaskId, !tid.isEmpty {
                     Button {
-                        dismiss()
+                        closeSelf()
                         onOpenSession?(tid)
                     } label: {
                         Text("看回放")

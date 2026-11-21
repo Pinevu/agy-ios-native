@@ -84,15 +84,14 @@ struct ChatView: View {
     @ObservedObject private var speech = SpeechManager.shared
 
     @State private var showDrawer = false
+    @State private var drawerSubpageOpen = false
+    @State private var chatSubpage: FullScreenSubpage? = nil
     @State private var showRunningList = false
     @State private var showBackToBottom = false
     @State private var stickBottom = true
     @State private var lastStreamScroll = Date.distantPast
     @State private var turnCursor: Int = -1
     @State private var showModelPicker = false
-    @State private var showQuota = false
-    @State private var showJobs = false
-    @State private var showSkills = false
     @State private var showAttach = false
     @State private var showPhotoPicker = false
     @State private var showFileImporter = false
@@ -110,28 +109,28 @@ struct ChatView: View {
     @State private var editingItem: ChatItem?
     @State private var editingPaths: [String] = []
 
-    /// 把连续的 {.note, .tool} 链（包含 >= 2 个工具时）自动折叠为一个稳定 ToolGroup
+    /// 仅折叠「已完成历史轮次」（最后一条用户消息之前）的连续 {.note, .tool} 链。
+    /// 当前轮次（尤其任务执行中）绝不中途合并或收缩高度，彻底杜绝 LazyVStack 高度塌陷导致的白屏。
     private var displayUnits: [ChatDisplayUnit] {
         let items = state.items
+        let foldBoundary = items.lastIndex(where: {
+            if case .user = $0.kind { return true }
+            return false
+        }) ?? 0
+
         var out: [ChatDisplayUnit] = []
         var i = 0
         while i < items.count {
-            if isToolOrNote(items[i].kind) {
+            if i < foldBoundary && isToolOrNote(items[i].kind) {
                 var j = i
                 var toolCount = 0
-                var hasRunning = false
-                while j < items.count && isToolOrNote(items[j].kind) {
-                    if case .tool(_, _, _, _, let r) = items[j].kind {
-                        toolCount += 1
-                        if r { hasRunning = true }
-                    }
+                while j < foldBoundary && isToolOrNote(items[j].kind) {
+                    if case .tool = items[j].kind { toolCount += 1 }
                     j += 1
                 }
                 if toolCount >= 2 {
                     let slice = Array(items[i..<j])
-                    let isTail = (j == items.count)
-                    let liveGroup = hasRunning || (state.isCurrentTaskRunning && isTail)
-                    out.append(.toolGroup(id: slice[0].id, items: slice, isLiveGroup: liveGroup))
+                    out.append(.toolGroup(id: slice[0].id, items: slice, isLiveGroup: false))
                     i = j
                     continue
                 }
@@ -179,13 +178,14 @@ struct ChatView: View {
             )
 
             if showDrawer {
-                DrawerView(isPresented: $showDrawer)
+                DrawerView(isPresented: $showDrawer, subpageOpen: $drawerSubpageOpen)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(Color(.systemBackground).ignoresSafeArea())
                     .transition(.move(edge: .leading))
                     .simultaneousGesture(
                         DragGesture(minimumDistance: 20)
                             .onEnded { v in
+                                guard !drawerSubpageOpen else { return }
                                 let dx = v.translation.width
                                 let dy = v.translation.height
                                 guard dx < -60, abs(dx) > abs(dy) * 1.5 else { return }
@@ -194,6 +194,31 @@ struct ChatView: View {
                             }
                     )
                     .zIndex(3)
+            }
+
+            if let page = chatSubpage {
+                SideSlideFullScreenContainer(onClose: {
+                    withAnimation(.easeIn(duration: 0.22)) { chatSubpage = nil }
+                }) {
+                    switch page {
+                    case .jobs:
+                        JobsSheet(onClose: {
+                            withAnimation(.easeIn(duration: 0.22)) { chatSubpage = nil }
+                        }) { sid in
+                            withAnimation(.easeIn(duration: 0.2)) { chatSubpage = nil }
+                            Task { await state.openSessionById(sid) }
+                        }
+                    case .skills:
+                        SkillsSheet(onClose: {
+                            withAnimation(.easeIn(duration: 0.22)) { chatSubpage = nil }
+                        })
+                    case .usage:
+                        QuotaSheet(onClose: {
+                            withAnimation(.easeIn(duration: 0.22)) { chatSubpage = nil }
+                        })
+                    }
+                }
+                .zIndex(5)
             }
 
             if let t = state.toast {
@@ -213,6 +238,7 @@ struct ChatView: View {
         }
         .animation(.easeInOut(duration: 0.2), value: state.toast)
         .animation(.easeOut(duration: 0.24), value: showDrawer)
+        .animation(.easeOut(duration: 0.25), value: chatSubpage)
         .onAppear {
             input = state.savedDraft(for: state.currentSession?.id)
             consumePendingDeepLink()
@@ -263,17 +289,6 @@ struct ChatView: View {
         }
         .sheet(isPresented: $showRunningList) { runningSheet }
         .sheet(isPresented: $showModelPicker) { modelSheet }
-        .sheet(isPresented: $showQuota) { QuotaSheet() }
-        .sheet(isPresented: $showJobs) {
-            JobsSheet { sid in
-                Task { await state.openSessionById(sid) }
-            }
-        }
-        .sheet(isPresented: $showSkills) {
-            SkillsSheet()
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
-        }
         .sheet(isPresented: $showTransferSheet) {
             DraftTransferSheet(draftText: input) { target, replace in
                 let textToMove = input
@@ -371,11 +386,11 @@ struct ChatView: View {
         case .voice:
             startVoiceInput()
         case .jobs:
-            showJobs = true
+            withAnimation(.easeOut(duration: 0.25)) { chatSubpage = .jobs }
         case .skills:
-            showSkills = true
+            withAnimation(.easeOut(duration: 0.25)) { chatSubpage = .skills }
         case .quota:
-            showQuota = true
+            withAnimation(.easeOut(duration: 0.25)) { chatSubpage = .usage }
         }
     }
 
@@ -606,11 +621,19 @@ struct ChatView: View {
                         .id("running")
                     }
                     Color.clear
-                        .frame(height: 1)
+                        .frame(height: 8)
                         .id("bottom-sentinel")
                         .onAppear {
                             if showBackToBottom { withAnimation(.easeOut(duration: 0.18)) { showBackToBottom = false } }
                             stickBottom = true
+                        }
+                        .onDisappear {
+                            // 仍在贴底跟随但底部锚点被挤出视口（流式变高或布局重算）→ 立即拉回，杜绝白屏
+                            guard stickBottom && state.isCurrentTaskRunning else { return }
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.14) {
+                                guard stickBottom else { return }
+                                withAnimation(nil) { proxy.scrollTo("bottom-sentinel", anchor: .bottom) }
+                            }
                         }
                 }
                 .padding(.horizontal, 16)
@@ -620,10 +643,11 @@ struct ChatView: View {
             .simultaneousGesture(
                 DragGesture(minimumDistance: 12)
                     .onEnded { value in
-                        if value.translation.height < -28 {
+                        // 手指向下拉（translation.height > 0）= 页面向上翻看历史，解除自动贴底
+                        if value.translation.height > 28 {
                             withAnimation(.easeOut(duration: 0.18)) { showBackToBottom = true }
                             stickBottom = false
-                        } else if value.translation.height > 28 {
+                        } else if value.translation.height < -28 {
                             turnCursor = -1
                         }
                     }

@@ -229,8 +229,12 @@ extension AppState {
         }
 
         if let remote = currentServerTask {
-            loadingSession = session.id
-            items = []
+            if let cached = sessionItems[session.id], !cached.isEmpty {
+                items = cached
+            } else {
+                loadingSession = session.id
+                items = []
+            }
             defer { loadingSession = nil }
             if let events = await reconcile(sessionId: session.id) {
                 adoptRemoteTask(remote, sessionId: session.id,

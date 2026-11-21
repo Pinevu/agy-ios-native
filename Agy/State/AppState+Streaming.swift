@@ -783,6 +783,10 @@ extension AppState {
                 guard let t = ev.text, !t.isEmpty else { continue }
                 appendAssistant(t)
 
+            case "thought":
+                guard let t = ev.text, !t.isEmpty else { continue }
+                out.append(ChatItem(kind: .thought(text: t)))
+
             case "tool":
                 if let i = noteIndex(in: out), case .assistant(let t) = out[i].kind {
                     out[i].kind = .note(text: t.trimmingCharacters(in: .whitespacesAndNewlines))
