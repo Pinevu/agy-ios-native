@@ -90,6 +90,7 @@ struct ChatView: View {
     @State private var showBackToBottom = false
     @State private var stickBottom = true
     @State private var lastStreamScroll = Date.distantPast
+    @State private var trailingScrollTask: Task<Void, Never>?
     @State private var turnCursor: Int = -1
     @State private var showModelPicker = false
     @State private var showAttach = false
@@ -631,8 +632,8 @@ struct ChatView: View {
                             stickBottom = true
                         }
                         .onDisappear {
-                            // 仍在贴底跟随但底部锚点被挤出视口（流式变高或布局重算）→ 立即拉回，杜绝白屏
-                            guard stickBottom && state.isCurrentTaskRunning else { return }
+                            // 仍在贴底跟随但底部锚点被挤出视口（流式变高、回放补齐或布局重算）→ 立即拉回，杜绝白屏
+                            guard stickBottom && !state.items.isEmpty else { return }
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.14) {
                                 guard stickBottom else { return }
                                 withAnimation(nil) { proxy.scrollTo("bottom-sentinel", anchor: .bottom) }
@@ -683,10 +684,20 @@ struct ChatView: View {
             .onChange(of: state.streamTick) { _ in
                 guard stickBottom else { return }
                 let now = Date()
-                guard now.timeIntervalSince(lastStreamScroll) > 0.10 else { return }
-                lastStreamScroll = now
-                DispatchQueue.main.async {
-                    withAnimation(nil) { proxy.scrollTo("bottom-sentinel", anchor: .bottom) }
+                trailingScrollTask?.cancel()
+                if now.timeIntervalSince(lastStreamScroll) > 0.10 {
+                    lastStreamScroll = now
+                    DispatchQueue.main.async {
+                        withAnimation(nil) { proxy.scrollTo("bottom-sentinel", anchor: .bottom) }
+                    }
+                } else {
+                    // 尾部补滚：绝不丢掉最后一段输出或回放结束时的滚底事件
+                    trailingScrollTask = Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 120_000_000)
+                        guard !Task.isCancelled, stickBottom else { return }
+                        lastStreamScroll = Date()
+                        withAnimation(nil) { proxy.scrollTo("bottom-sentinel", anchor: .bottom) }
+                    }
                 }
             }
             .onChange(of: state.currentSession?.id) { _ in
@@ -1293,10 +1304,29 @@ struct ChatView: View {
 
     private var modelSheet: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text("选择运行模型")
-                    .font(.system(size: 16, weight: .semibold))
+            HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("选择运行模型")
+                        .font(.system(size: 16, weight: .semibold))
+                    Text(state.currentInstance.name)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                }
                 Spacer()
+                Button {
+                    Task { await state.refreshModels(force: true) }
+                } label: {
+                    if state.isLoadingModels {
+                        ProgressView().scaleEffect(0.75)
+                    } else {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .disabled(state.isLoadingModels)
+                .buttonStyle(.plain)
+                .padding(.trailing, 8)
                 Button("完成") { showModelPicker = false }
                     .font(.system(size: 15))
             }
@@ -1340,6 +1370,9 @@ struct ChatView: View {
                 }
                 .padding(.bottom, 12)
             }
+        }
+        .task(id: state.currentInstanceId) {
+            await state.refreshModels(force: false)
         }
         .presentationDetents([.height(modelSheetHeight)])
         .presentationDragIndicator(.visible)

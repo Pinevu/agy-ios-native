@@ -110,6 +110,7 @@ final class KaTeXSnapshotEngine: NSObject, WKNavigationDelegate, WKScriptMessage
     private var isBooted = false
     private var pending: [Request] = []
     private var active: Request?
+    private var activeWatchdog: Task<Void, Never>?
 
     private override init() {
         super.init()
@@ -204,6 +205,15 @@ final class KaTeXSnapshotEngine: NSObject, WKNavigationDelegate, WKScriptMessage
         processNext()
     }
 
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        self.webView = nil
+        isBooted = false
+        finishActive(with: nil)
+        if !pending.isEmpty {
+            ensureWebView()
+        }
+    }
+
     private func processNext() {
         guard isBooted, active == nil, !pending.isEmpty, let wv = webView else { return }
         let req = pending.removeFirst()
@@ -213,6 +223,13 @@ final class KaTeXSnapshotEngine: NSObject, WKNavigationDelegate, WKScriptMessage
             return
         }
         active = req
+        activeWatchdog?.cancel()
+        let reqKey = req.key
+        activeWatchdog = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            guard let self, self.active?.key == reqKey else { return }
+            self.finishActive(with: nil)
+        }
         wv.frame = CGRect(x: 0, y: 0, width: req.maxWidth, height: 600)
         let color = req.isDark ? "#F2F2F7" : "#1C1C1E"
         let jsTex = jsString(req.latex)
@@ -252,6 +269,8 @@ final class KaTeXSnapshotEngine: NSObject, WKNavigationDelegate, WKScriptMessage
     }
 
     private func finishActive(with image: UIImage?) {
+        activeWatchdog?.cancel()
+        activeWatchdog = nil
         guard let req = active else { return }
         active = nil
         if let img = image {

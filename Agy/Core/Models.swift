@@ -290,9 +290,25 @@ struct ServerRunning: Decodable {
 
 struct QuotaResponse: Decodable {
     let ok: Bool?
+    let error: String?
     let plan: String?
     let groups: [QuotaGroup]?
+    let buckets: [QuotaBucket]?
     let week: WeekStat?
+}
+
+struct QuotaBucket: Decodable, Identifiable {
+    let model: String?
+    let label: String
+    let remaining: Double?
+    let resetAt: String?
+
+    var id: String { (model ?? label) + "|" + (resetAt ?? "") }
+
+    enum CodingKeys: String, CodingKey {
+        case model, label, remaining
+        case resetAt = "reset_at"
+    }
 }
 
 struct QuotaGroup: Decodable, Identifiable {

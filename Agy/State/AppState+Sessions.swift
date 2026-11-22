@@ -6,16 +6,22 @@ extension AppState {
     // MARK: - 刷新与元数据同步
 
     func refreshSessions() async {
+        let epoch = instanceEpoch
         do {
-            sessions = try await api.tasks()
+            let list = try await api.tasks()
+            guard epoch == instanceEpoch else { return }
+            sessions = list
             syncWidgetSnapshot()
         } catch {
+            guard epoch == instanceEpoch else { return }
             showToast(error.localizedDescription)
         }
     }
 
     func syncSessionMeta() async {
+        let epoch = instanceEpoch
         guard let remote = try? await api.getSessionsMeta() else { return }
+        guard epoch == instanceEpoch else { return }
         sessionMeta = remote
         pinnedIds = remote.pinned
         customTitles = remote.customTitles
@@ -202,12 +208,14 @@ extension AppState {
     // MARK: - 打开 / 新建会话
 
     func open(_ session: Session) async {
+        let epoch = instanceEpoch
         if let cur = currentSession?.id, cur != session.id {
             sessionItems[cur] = items
         }
         draftSessionKey = "draft-\(UUID().uuidString)"
         lastActiveTaskId = session.latestTaskId
         currentSession = session
+        UserDefaults.standard.set(session.id, forKey: lastSessionStorageKey)
         UserDefaults.standard.set(session.id, forKey: "agy_last_session")
         conversationId = session.conversationId
         assistantIndex = nil
@@ -226,12 +234,20 @@ extension AppState {
            let buf = taskBuffers[rt.taskId], !buf.isEmpty {
             items = buf
             if let rtConv = rt.conversationId { conversationId = rtConv }
+            // 若该后台任务流已超过 12 秒无心跳，切回时立即触发一次断流自愈
+            let last = lastStreamActivity[rt.taskId] ?? .distantPast
+            if Date().timeIntervalSince(last) > 12 {
+                Task { @MainActor [weak self] in
+                    await self?.syncRunning(forceCurrentRecovery: true)
+                }
+            }
             return
         }
 
         // 若会话显示未结束但本地还没拿到最新运行表，先同步一次 /api/running 再决定是否接回 SSE
         if currentServerTask == nil && !session.done {
-            _ = await syncRunning()
+            await syncRunning()
+            guard epoch == instanceEpoch, currentSession?.id == session.id else { return }
         }
 
         if let remote = currentServerTask {
@@ -241,8 +257,9 @@ extension AppState {
                 loadingSession = session.id
                 items = []
             }
-            defer { loadingSession = nil }
+            defer { if loadingSession == session.id { loadingSession = nil } }
             if let events = await reconcile(sessionId: session.id) {
+                guard epoch == instanceEpoch, currentSession?.id == session.id else { return }
                 if hasTaskEnded(events, taskId: remote.taskId) {
                     serverRunning = serverRunning.filter { $0.value.taskId != remote.taskId }
                     reconciledTaskIds.insert(remote.taskId)
@@ -266,12 +283,14 @@ extension AppState {
 
         loadingSession = session.id
         items = []
-        defer { loadingSession = nil }
+        defer { if loadingSession == session.id { loadingSession = nil } }
         do {
             let events = try await api.replay(session.id)
+            guard epoch == instanceEpoch, currentSession?.id == session.id else { return }
             apply(events, live: false)
             sessionItems[session.id] = items
         } catch {
+            guard epoch == instanceEpoch else { return }
             showToast(error.localizedDescription)
         }
     }
@@ -293,6 +312,7 @@ extension AppState {
         if let cur = currentSession?.id { sessionItems[cur] = items }
         draftSessionKey = "draft-\(UUID().uuidString)"
         lastActiveTaskId = nil
+        UserDefaults.standard.set("draft", forKey: lastSessionStorageKey)
         UserDefaults.standard.set("draft", forKey: "agy_last_session")
         currentSession = nil
         conversationId = nil

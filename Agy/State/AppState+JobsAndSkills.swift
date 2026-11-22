@@ -6,9 +6,11 @@ extension AppState {
     // MARK: - 定时任务
 
     func refreshJobs() async {
+        let epoch = instanceEpoch
         isLoadingJobs = true
-        defer { isLoadingJobs = false }
+        defer { if epoch == instanceEpoch { isLoadingJobs = false } }
         if let list = try? await api.jobs() {
+            guard epoch == instanceEpoch else { return }
             jobs = list
         }
     }
@@ -76,13 +78,17 @@ extension AppState {
     // MARK: - 技能与社区市场
 
     func refreshSkills() async {
+        let epoch = instanceEpoch
         if let list = try? await api.skills() {
+            guard epoch == instanceEpoch else { return }
             skills = list
         }
     }
 
     func refreshSkillsCatalog(force: Bool = false) async {
+        let epoch = instanceEpoch
         if let resp = try? await api.skillsCatalog(force: force), let list = resp.skills {
+            guard epoch == instanceEpoch else { return }
             skillsCatalog = list
         }
     }

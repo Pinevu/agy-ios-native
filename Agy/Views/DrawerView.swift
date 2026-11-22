@@ -96,7 +96,7 @@ struct DrawerView: View {
         guard query.isEmpty && selectedGroupId == nil && !batchMode else { return [] }
         let cutoff = Date().timeIntervalSince1970 - 3600
         return state.sessions.filter { s in
-            !state.isPinned(s) && (!s.done || state.serverRunning[s.id] != nil || state.isUnread(s) || (s.updated ?? s.started) > cutoff)
+            !state.isPinned(s) && (state.isSessionRunning(s) || state.isUnread(s) || (s.updated ?? s.started) > cutoff)
         }
         .sorted { ($0.updated ?? $0.started) > ($1.updated ?? $1.started) }
         .prefix(5)
@@ -229,6 +229,13 @@ struct DrawerView: View {
         .animation(.easeOut(duration: 0.25), value: activeSubpage)
         .onChange(of: activeSubpage) { p in
             subpageOpen = (p != nil)
+        }
+        .onChange(of: state.currentInstanceId) { _ in
+            selectedGroupId = nil
+            query = ""
+            batchMode = false
+            selectedIds.removeAll()
+            activeSubpage = nil
         }
         .onDisappear {
             subpageOpen = false
@@ -572,7 +579,7 @@ struct DrawerView: View {
     private func sessionRow(_ s: Session) -> some View {
         let isSelected = selectedIds.contains(s.id)
         let grp = state.group(for: s)
-        let runningNow = !s.done || state.serverRunning[s.id] != nil
+        let runningNow = state.isSessionRunning(s)
         let unread = state.isUnread(s)
 
         return Button {
@@ -847,56 +854,99 @@ struct QuotaSheet: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                if let q = displayedQuota {
+                if let q = displayedQuota, hasQuotaContent(q) {
                     VStack(alignment: .leading, spacing: 16) {
-                        if let plan = q.plan, !plan.isEmpty, plan != "-" {
-                            HStack(spacing: 6) {
+                        HStack(spacing: 6) {
+                            if let plan = q.plan, !plan.isEmpty, plan != "-" {
                                 Image(systemName: "star.circle.fill")
                                     .foregroundStyle(Color.accentColor)
                                 Text(plan)
                                     .font(.system(size: 14.5, weight: .semibold))
-                                Spacer()
-                                if let wk = q.week, (wk.calls ?? 0) > 0 {
-                                    Text("近 7 天 \(wk.calls ?? 0) 次任务")
-                                        .font(.system(size: 11.5))
-                                        .foregroundStyle(.secondary)
-                                }
                             }
-                            .padding(.horizontal, 2)
+                            Text(state.currentInstance.name)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 2)
+                                .background(Color(.secondarySystemGroupedBackground), in: Capsule())
+                            Spacer()
+                            if let wk = q.week, (wk.calls ?? 0) > 0 {
+                                Text("近 7 天 \(wk.calls ?? 0) 次任务")
+                                    .font(.system(size: 11.5))
+                                    .foregroundStyle(.secondary)
+                            }
                         }
+                        .padding(.horizontal, 2)
 
-                        ForEach(q.groups ?? []) { g in
+                        if let groups = q.groups, !groups.isEmpty {
+                            ForEach(groups) { g in
+                                VStack(alignment: .leading, spacing: 0) {
+                                    HStack(alignment: .firstTextBaseline) {
+                                        Text(localizedGroupName(g.name))
+                                            .font(.system(size: 14, weight: .semibold))
+                                            .foregroundStyle(.secondary)
+                                        Spacer()
+                                        if let c = g.count, c > 0 {
+                                            Text("\(c) 个模型")
+                                                .font(.system(size: 11))
+                                                .foregroundStyle(.tertiary)
+                                        }
+                                    }
+                                    .padding(.horizontal, 14)
+                                    .padding(.top, 12)
+                                    .padding(.bottom, 8)
+
+                                    let validWins = g.windows.filter { $0.remaining != nil || $0.resetAt != nil }
+                                    ForEach(Array(validWins.enumerated()), id: \.element.id) { idx, w in
+                                        if idx > 0 {
+                                            Divider().opacity(0.35).padding(.leading, 14)
+                                        }
+                                        quotaWindowRow(w)
+                                    }
+
+                                    if let desc = g.desc, !desc.isEmpty {
+                                        Text(shortGroupDesc(desc))
+                                            .font(.system(size: 11))
+                                            .foregroundStyle(.tertiary)
+                                            .padding(.horizontal, 14)
+                                            .padding(.top, 2)
+                                            .padding(.bottom, 10)
+                                    }
+                                }
+                                .background(Color(.secondarySystemGroupedBackground))
+                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .stroke(Color(.separator).opacity(0.22), lineWidth: 0.6)
+                                )
+                            }
+                        } else if let buckets = q.buckets, !buckets.isEmpty {
+                            // 兼容旧版后端实例（仅返回 buckets 未返回 groups）
                             VStack(alignment: .leading, spacing: 0) {
-                                HStack(alignment: .firstTextBaseline) {
-                                    Text(localizedGroupName(g.name))
+                                HStack {
+                                    Text("模型 5 小时配额")
                                         .font(.system(size: 14, weight: .semibold))
                                         .foregroundStyle(.secondary)
                                     Spacer()
-                                    if let c = g.count, c > 0 {
-                                        Text("\(c) 个模型")
-                                            .font(.system(size: 11))
-                                            .foregroundStyle(.tertiary)
-                                    }
+                                    Text("\(buckets.count) 个模型")
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(.tertiary)
                                 }
                                 .padding(.horizontal, 14)
                                 .padding(.top, 12)
                                 .padding(.bottom, 8)
 
-                                let validWins = g.windows.filter { $0.remaining != nil || $0.resetAt != nil }
-                                ForEach(Array(validWins.enumerated()), id: \.element.id) { idx, w in
+                                ForEach(Array(buckets.enumerated()), id: \.element.id) { idx, b in
                                     if idx > 0 {
                                         Divider().opacity(0.35).padding(.leading, 14)
                                     }
-                                    quotaWindowRow(w)
-                                }
-
-                                if let desc = g.desc, !desc.isEmpty {
-                                    Text(shortGroupDesc(desc))
-                                        .font(.system(size: 11))
-                                        .foregroundStyle(.tertiary)
-                                        .padding(.horizontal, 14)
-                                        .padding(.top, 2)
-                                        .padding(.bottom, 10)
+                                    quotaWindowRow(QuotaWindow(
+                                        window: "5h",
+                                        label: b.label,
+                                        remaining: b.remaining,
+                                        resetAt: b.resetAt,
+                                        desc: nil
+                                    ))
                                 }
                             }
                             .background(Color(.secondarySystemGroupedBackground))
@@ -912,7 +962,7 @@ struct QuotaSheet: View {
                 } else if loading {
                     VStack(spacing: 12) {
                         ProgressView()
-                        Text("正在获取用量…")
+                        Text("正在获取 \(state.currentInstance.name) 用量…")
                             .font(.system(size: 13))
                             .foregroundStyle(.secondary)
                     }
@@ -920,7 +970,7 @@ struct QuotaSheet: View {
                     .padding(.top, 80)
                 } else {
                     VStack(spacing: 10) {
-                        Text(loadError ?? "用量加载失败")
+                        Text(loadError ?? displayedQuota?.error ?? "当前实例暂未返回用量数据")
                             .font(.system(size: 13.5))
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
@@ -964,11 +1014,21 @@ struct QuotaSheet: View {
                     .disabled(refreshing)
                 }
             }
-            .task { await load(force: false) }
+            .task(id: state.currentInstanceId) {
+                quota = nil
+                loadError = nil
+                await load(force: false)
+            }
             .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { _ in
                 Task { await load(force: false) }
             }
         }
+    }
+
+    private func hasQuotaContent(_ q: QuotaResponse) -> Bool {
+        if let g = q.groups, !g.isEmpty { return true }
+        if let b = q.buckets, !b.isEmpty { return true }
+        return false
     }
 
     private func quotaWindowRow(_ w: QuotaWindow) -> some View {
@@ -1023,20 +1083,30 @@ struct QuotaSheet: View {
     }
 
     private func load(force: Bool = false) async {
-        if displayedQuota == nil { loading = true }
+        let targetEpoch = state.instanceEpoch
+        if displayedQuota == nil || !hasQuotaContent(displayedQuota!) { loading = true }
         refreshing = true
         loadError = nil
         defer {
-            loading = false
-            refreshing = false
+            if targetEpoch == state.instanceEpoch {
+                loading = false
+                refreshing = false
+            }
         }
         do {
             let q = try await APIClient.shared.quota(force: force)
-            quota = q
-            state.lastQuotaSnapshot = q
-            state.syncWidgetSnapshot()
+            guard targetEpoch == state.instanceEpoch else { return }
+            if hasQuotaContent(q) {
+                quota = q
+                state.lastQuotaSnapshot = q
+                state.syncWidgetSnapshot()
+            } else {
+                quota = q
+                loadError = q.error ?? "当前实例暂未返回用量数据"
+            }
         } catch {
-            if displayedQuota == nil {
+            guard targetEpoch == state.instanceEpoch else { return }
+            if displayedQuota == nil || !hasQuotaContent(displayedQuota!) {
                 loadError = error.localizedDescription
             } else if force {
                 state.showToast("刷新失败：\(error.localizedDescription)")

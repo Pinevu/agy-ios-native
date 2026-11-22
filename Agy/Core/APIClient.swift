@@ -17,6 +17,12 @@ enum APIError: LocalizedError {
     }
 }
 
+enum SessionCheckResult {
+    case valid
+    case unauthorized
+    case unreachable
+}
+
 struct ErrorBody: Decodable { let error: String? }
 struct EmptyResponse: Decodable {}
 
@@ -29,21 +35,29 @@ final class APIClient {
     private(set) var token: String?
 
     private let session: URLSession
-    /// 事件流专用：空闲 25 秒即超时，避免代理冻住连接导致界面卡死
+    private let uploadSession: URLSession
+    /// 事件流专用：空闲 22 秒即超时（服务端每 5 秒发心跳），避免代理/切网冻住连接导致假死
     private let streamSession: URLSession
     private let decoder: JSONDecoder
 
     init() {
         let cfg = URLSessionConfiguration.default
-        cfg.timeoutIntervalForRequest = 60
-        cfg.timeoutIntervalForResource = 1800
-        cfg.waitsForConnectivity = true
+        cfg.timeoutIntervalForRequest = 20
+        cfg.timeoutIntervalForResource = 60
+        cfg.waitsForConnectivity = false
         cfg.httpMaximumConnectionsPerHost = 16
         session = URLSession(configuration: cfg)
 
+        let ucfg = URLSessionConfiguration.default
+        ucfg.timeoutIntervalForRequest = 60
+        ucfg.timeoutIntervalForResource = 300
+        ucfg.waitsForConnectivity = false
+        uploadSession = URLSession(configuration: ucfg)
+
         let scfg = URLSessionConfiguration.default
-        scfg.timeoutIntervalForRequest = 25
-        scfg.timeoutIntervalForResource = 7200
+        scfg.timeoutIntervalForRequest = 22
+        scfg.timeoutIntervalForResource = 3600
+        scfg.waitsForConnectivity = false
         streamSession = URLSession(configuration: scfg)
 
         decoder = JSONDecoder()
@@ -156,13 +170,26 @@ final class APIClient {
     }
 
     func checkSession() async -> Bool {
+        await checkSessionStatus() == .valid
+    }
+
+    /// 带独立短超时的登录态探测：严格区分「真 401 失效」与「网络抖动/超时」，避免电梯切网误删 Keychain Token
+    func checkSessionStatus(timeout: TimeInterval = 8, overrideToken: String? = nil) async -> SessionCheckResult {
         struct Resp: Decodable { let ok: Bool? }
-        guard isLoggedIn else { return false }
+        let useToken = overrideToken ?? token
+        guard let useToken, !useToken.isEmpty else { return .unauthorized }
+        var req = makeRequest("api/session")
+        req.timeoutInterval = timeout
+        req.setValue("Bearer \(useToken)", forHTTPHeaderField: "Authorization")
         do {
-            let r = try await send("api/session", as: Resp.self)
-            return r.ok == true
+            let (data, resp) = try await session.data(for: req)
+            guard let http = resp as? HTTPURLResponse else { return .unreachable }
+            if http.statusCode == 401 { return .unauthorized }
+            guard http.statusCode == 200 else { return .unreachable }
+            let r = try? decoder.decode(Resp.self, from: data)
+            return r?.ok == true ? .valid : .unauthorized
         } catch {
-            return false
+            return .unreachable
         }
     }
 
@@ -252,9 +279,10 @@ final class APIClient {
         return try await send("api/quota", queryItems: q, as: QuotaResponse.self)
     }
 
-    func models() async throws -> [ModelInfo] {
+    func models(force: Bool = false) async throws -> [ModelInfo] {
         struct Resp: Decodable { let models: [ModelInfo] }
-        let r = try await send("api/models", as: Resp.self)
+        let q = force ? [URLQueryItem(name: "force", value: "1")] : nil
+        let r = try await send("api/models", queryItems: q, as: Resp.self)
         return r.models
     }
 
@@ -340,7 +368,15 @@ final class APIClient {
         let b64 = data.base64EncodedString()
         let payload: [String: Any] = ["name": name, "data": "data:application/octet-stream;base64,\(b64)"]
         let body = try JSONSerialization.data(withJSONObject: payload)
-        let r = try await send("api/upload", method: "POST", body: body, as: UploadResponse.self)
+        let req = makeRequest("api/upload", method: "POST", body: body)
+        let (respData, resp) = try await uploadSession.data(for: req)
+        guard let http = resp as? HTTPURLResponse else { throw APIError.server("无响应") }
+        if http.statusCode == 401 { throw APIError.unauthorized }
+        if http.statusCode >= 400 {
+            let msg = (try? decoder.decode(ErrorBody.self, from: respData))?.error ?? "HTTP \(http.statusCode)"
+            throw APIError.server(msg)
+        }
+        let r = try decoder.decode(UploadResponse.self, from: respData)
         guard let p = r.path else { throw APIError.server(r.error ?? "上传失败") }
         return p
     }
@@ -408,6 +444,7 @@ final class APIClient {
         taskId: String,
         from: Int = 0,
         onActivity: @escaping @MainActor () -> Void = {},
+        onDataLine: @escaping @MainActor () -> Void = {},
         onEvent: @escaping @MainActor (ChatEvent) -> Void,
         onClose: @escaping @MainActor () async -> Void
     ) -> Task<Void, Never>? {
@@ -420,6 +457,7 @@ final class APIClient {
 
         var req = URLRequest(url: url)
         req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        req.cachePolicy = .reloadIgnoringLocalCacheData
 
         return Task { [weak self] in
             guard let self else { return }
@@ -434,6 +472,7 @@ final class APIClient {
                     if Task.isCancelled { return }
                     await onActivity()
                     guard line.hasPrefix("data:") else { continue }
+                    await onDataLine()
                     let json = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
                     guard let data = json.data(using: .utf8) else { continue }
                     if let ev = try? lineDecoder.decode(ChatEvent.self, from: data) {

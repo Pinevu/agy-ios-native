@@ -8,6 +8,7 @@ struct InstancesSheet: View {
     @State private var newName = ""
     @State private var newURL = ""
     @State private var busy = false
+    @State private var switchingId: String? = nil
     @State private var status: [String: String] = [:]
 
     var body: some View {
@@ -16,18 +17,25 @@ struct InstancesSheet: View {
                 Section {
                     ForEach(state.instances) { inst in
                         Button {
+                            guard !busy else { return }
                             Task {
                                 busy = true
+                                switchingId = inst.id
                                 await state.switchInstance(inst)
+                                switchingId = nil
                                 busy = false
-                                if state.isLoggedIn { dismiss() }
+                                dismiss()
                             }
                         } label: {
                             HStack(spacing: 10) {
-                                Image(systemName: inst.id == state.currentInstanceId
-                                      ? "largecircle.fill.circle" : "circle")
-                                    .foregroundStyle(inst.id == state.currentInstanceId
-                                                     ? Color.accentColor : Color.secondary)
+                                if switchingId == inst.id {
+                                    ProgressView().scaleEffect(0.75).frame(width: 20, height: 20)
+                                } else {
+                                    Image(systemName: inst.id == state.currentInstanceId
+                                          ? "largecircle.fill.circle" : "circle")
+                                        .foregroundStyle(inst.id == state.currentInstanceId
+                                                         ? Color.accentColor : Color.secondary)
+                                }
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(inst.name)
                                         .font(.system(size: 15))
@@ -42,6 +50,7 @@ struct InstancesSheet: View {
                                     .foregroundStyle(.tertiary)
                             }
                         }
+                        .disabled(busy)
                         .buttonStyle(.plain)
                         .swipeActions {
                             Button(role: .destructive) {

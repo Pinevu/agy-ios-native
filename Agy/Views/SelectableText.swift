@@ -44,7 +44,13 @@ struct SelectableText: UIViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: SelectableLabel, context: Context) -> CGSize? {
-        let width = max(1, proposal.width ?? UIScreen.main.bounds.width)
+        let fallbackWidth = max(200, UIScreen.main.bounds.width - 32)
+        let width: CGFloat
+        if let pw = proposal.width, pw.isFinite, pw > 20 {
+            width = pw
+        } else {
+            width = fallbackWidth
+        }
         let c = context.coordinator
 
         // 关键：测量必须和「当前这段文字」绑定。之前只按宽度缓存，
@@ -61,26 +67,30 @@ struct SelectableText: UIViewRepresentable {
             .boundingRect(with: CGSize(width: width, height: .greatestFiniteMagnitude),
                           options: [.usesLineFragmentOrigin, .usesFontLeading],
                           context: nil)
-        let h = ceil(rect.height)
+        let h = max(22, ceil(rect.height) + 4)
         c.measuredSource = attributed
         c.measuredWidth = width
         c.measuredHeight = h
         return CGSize(width: width, height: h)
     }
 
-    /// assigned 字号归一：attributedText 自带的 UIFont 会覆盖 UITextView.font，
-    /// 所以逐段强制到基准字号，同时保留粗体/斜体/等宽等字形特征。
+    /// assigned 字号与前景色归一：attributedText 自带的 UIFont 会覆盖 UITextView.font，
+    /// 未显式设颜色的区间在深色模式下 UITextView 默认会落回黑色导致「黑底黑字白屏」。
     private static func normalized(_ src: NSAttributedString) -> NSAttributedString {
         let out = NSMutableAttributedString(attributedString: src)
         let full = NSRange(location: 0, length: out.length)
         out.enumerateAttribute(.font, in: full, options: []) { value, range, _ in
             guard let old = value as? UIFont else {
-                // 没有字体属性的段落显式补上基准字号，否则会跟随 UITextView 的默认值飘
                 out.addAttribute(.font, value: UIFont.systemFont(ofSize: baseFontSize), range: range)
                 return
             }
             if abs(old.pointSize - baseFontSize) < 0.01 { return }
             out.addAttribute(.font, value: UIFont(descriptor: old.fontDescriptor, size: baseFontSize), range: range)
+        }
+        out.enumerateAttribute(.foregroundColor, in: full, options: []) { value, range, _ in
+            if value == nil {
+                out.addAttribute(.foregroundColor, value: UIColor.label, range: range)
+            }
         }
         return out
     }

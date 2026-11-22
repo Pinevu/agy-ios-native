@@ -8,30 +8,17 @@ struct MarkdownView: View {
     /// 正在流式输出：用 SwiftUI 渲染保证高度同步、贴底跟手；结束后再切 UIKit 提供选择
     var isLive: Bool = false
 
-    /// 解析结果缓存：只在 text 变化时重算，滚动/父视图刷新不再重复解析
-    @State private var blocks: [MDBlock]
-
-    init(text: String, isLive: Bool = false) {
-        self.text = text
-        self.isLive = isLive
-        // 命中缓存就带着内容出生，省掉「先空一帧再填」的布局跳动
-        _blocks = State(initialValue: MarkdownParser.cached(text) ?? [])
-    }
-
     var body: some View {
-        // 流式时不能先等 .task 跑完再出内容：每次尾部文本变化，旧 blocks 会被清空一帧，
-        // LazyVStack 正好在那一帧回收行，就会出现整页白屏。实时行直接同步解析；
-        // 输出完成后仍用缓存，省掉长历史的重复解析。
-        let shown = isLive ? MarkdownParser.parse(text) : blocks
+        // MarkdownParser.parse 内置 O(1) NSCache 缓存；直接同步读取可彻底消除
+        // 「isLive 从 true 变 false 时 blocks 仍为 [] 导致整条回复瞬间白屏」与
+        // 「LazyVStack 滚动缓存未命中先 0 高度占位再撑开导致的整页空白」两类白屏。
+        let shown = MarkdownParser.parse(text)
         VStack(alignment: .leading, spacing: 11) {
-            ForEach(shown) { block in
+            ForEach(Array(shown.enumerated()), id: \.offset) { _, block in
                 blockView(block)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .task(id: text) {
-            if !isLive { blocks = MarkdownParser.parse(text) }
-        }
     }
 
     @ViewBuilder
@@ -278,7 +265,7 @@ struct ParagraphView: View {
             }
         } else if needsFlow {
             FlowLayout(spacing: 3, lineSpacing: 8) {
-                ForEach(segs) { seg in segView(seg) }
+                ForEach(Array(segs.enumerated()), id: \.offset) { _, seg in segView(seg) }
             }
         } else if isLive {
             Text(attributed)
@@ -446,14 +433,15 @@ struct AuthImage: View {
                 .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
             }
         }
-        .task {
-            guard image == nil else { return }
+        .task(id: "\(APIClient.shared.baseURLString)|\(taskId ?? "")|\(path)") {
+            let currentBase = APIClient.shared.baseURLString
             // 内存缓存命中：同步取出，不闪 loading
-            if let hit = ImageCache.shared.get(path, taskId: taskId) {
+            if let hit = ImageCache.shared.get(path, taskId: taskId, base: currentBase) {
                 image = hit
                 loading = false
                 return
             }
+            image = nil
             loading = true
             let isBareName = !path.contains("/")
             let img: UIImage?
@@ -462,7 +450,7 @@ struct AuthImage: View {
             } else {
                 img = await APIClient.shared.loadImage(path: path)
             }
-            if let img { ImageCache.shared.set(img, for: path, taskId: taskId) }
+            if let img { ImageCache.shared.set(img, for: path, taskId: taskId, base: currentBase) }
             await MainActor.run {
                 image = img
                 loading = false

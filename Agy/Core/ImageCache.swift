@@ -44,16 +44,16 @@ final class ImageCache {
         memCache.setObject(img, forKey: key as NSString, cost: imageCost(img))
     }
 
-    private func legacyKey(_ path: String, _ taskId: String?) -> String {
-        "\(taskId ?? "")|\(path)"
+    private func legacyKey(_ path: String, _ taskId: String?, _ base: String) -> String {
+        "\(base)|\(taskId ?? "")|\(path)"
     }
 
-    func get(_ path: String, taskId: String?) -> UIImage? {
-        get(key: legacyKey(path, taskId))
+    func get(_ path: String, taskId: String?, base: String = APIClient.shared.baseURLString) -> UIImage? {
+        get(key: legacyKey(path, taskId, base))
     }
 
-    func set(_ img: UIImage, for path: String, taskId: String?) {
-        set(img, forKey: legacyKey(path, taskId))
+    func set(_ img: UIImage, for path: String, taskId: String?, base: String = APIClient.shared.baseURLString) {
+        set(img, forKey: legacyKey(path, taskId, base))
     }
 
     private func imageCost(_ img: UIImage) -> Int {

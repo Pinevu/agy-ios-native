@@ -27,6 +27,22 @@ extension AppState {
         currentRunningTask != nil || currentServerTask != nil
     }
 
+    func isSessionRunning(_ s: Session) -> Bool {
+        if !s.done { return true }
+        if serverRunning[s.id] != nil { return true }
+        if serverRunning.values.contains(where: {
+            $0.sessionId == s.id
+            || (s.conversationId != nil && ($0.conversationId == s.conversationId || $0.sessionId == s.conversationId))
+            || $0.taskId == s.latestTaskId
+        }) { return true }
+        if running.values.contains(where: {
+            $0.sessionId == s.id
+            || (s.conversationId != nil && $0.conversationId == s.conversationId)
+            || $0.taskId == s.latestTaskId
+        }) { return true }
+        return false
+    }
+
     var mergedRunning: [RunningTask] {
         var out = Array(running.values)
         for (sid, sr) in serverRunning {
@@ -93,7 +109,9 @@ extension AppState {
     func appBecameActive() async {
         endBackgroundGraceTask()
         guard isLoggedIn else { return }
+        let epoch = instanceEpoch
         _ = await syncRunningInternal(forceCurrentRecovery: true)
+        guard epoch == instanceEpoch else { return }
         // 若当前会话任务已在后台完成（哪怕已超过 RECENT_DONE 窗口），切回前台无条件拉取权威回放并刷新会话列表
         if currentServerTask == nil && currentRunningTask == nil,
            let target = replayTargetId(
@@ -103,6 +121,7 @@ extension AppState {
            ) {
             await reconcileWithRetry(targetId: target, localKey: activeSessionKey)
         }
+        guard epoch == instanceEpoch else { return }
         Task { await refreshSessions() }
         startRunningPoller()
     }
@@ -113,7 +132,9 @@ extension AppState {
 
     @discardableResult
     private func syncRunningInternal(forceCurrentRecovery: Bool = false) async -> Bool {
+        let epoch = instanceEpoch
         guard let snap = try? await api.runningTasks() else { return false }
+        guard epoch == instanceEpoch else { return false }
 
         let prevServerTasks = Array(serverRunning.values)
 
@@ -192,6 +213,25 @@ extension AppState {
             let stale = Date().timeIntervalSince(last) > 15
             if forceCurrentRecovery || local == nil || stale {
                 await reconcileRemote(targetId: target, localKey: activeSessionKey, force: forceCurrentRecovery)
+            }
+        }
+
+        // 后台运行中的本地 SSE 同样巡检静默断流（超过 18s 无任何字节且服务端仍在跑 → 主动回放并重连）
+        let now = Date()
+        for (tid, rt) in running where serverTaskIds.contains(tid) && tid != currentServerTask?.taskId {
+            let last = lastStreamActivity[tid] ?? .distantPast
+            if now.timeIntervalSince(last) > 18 {
+                if let target = replayTargetId(forSessionKey: rt.sessionId, taskId: tid, conversationId: rt.conversationId),
+                   let events = await reconcile(sessionId: target, localKey: rt.sessionId) {
+                    if hasTaskEnded(events, taskId: tid) {
+                        finish(taskId: tid, needsImmediateReconcile: false)
+                        continue
+                    }
+                    received[tid] = replayedEventCount(events, taskId: tid)
+                }
+                if running[tid] != nil {
+                    listen(taskId: tid)
+                }
             }
         }
 
@@ -384,28 +424,34 @@ extension AppState {
     // MARK: - SSE 监听与重连
 
     func listen(taskId: String) {
+        // 先显式取消旧 SSE 连接，杜绝重连时泄漏旧 HTTP/2 流
+        running[taskId]?.stream?.cancel()
         let from = received[taskId] ?? 0
         let epoch = (streamEpoch[taskId] ?? 0) + 1
+        let instEpoch = instanceEpoch
         streamEpoch[taskId] = epoch
         lastStreamActivity[taskId] = Date()
         let task = api.stream(taskId: taskId, from: from, onActivity: { [weak self] in
-            guard self?.streamEpoch[taskId] == epoch else { return }
+            guard self?.instanceEpoch == instEpoch, self?.streamEpoch[taskId] == epoch else { return }
             self?.lastStreamActivity[taskId] = Date()
-        }, onEvent: { [weak self] ev in
-            guard self?.streamEpoch[taskId] == epoch else { return }
+        }, onDataLine: { [weak self] in
+            guard self?.instanceEpoch == instEpoch, self?.streamEpoch[taskId] == epoch else { return }
             self?.received[taskId, default: 0] += 1
+        }, onEvent: { [weak self] ev in
+            guard self?.instanceEpoch == instEpoch, self?.streamEpoch[taskId] == epoch else { return }
             self?.handle(ev, taskId: taskId)
         }, onClose: { [weak self] in
-            guard let self, self.streamEpoch[taskId] == epoch else { return }
+            guard let self, self.instanceEpoch == instEpoch, self.streamEpoch[taskId] == epoch else { return }
             await self.streamClosed(taskId: taskId)
         })
         running[taskId]?.stream = task
     }
 
     private func streamClosed(taskId: String) async {
+        let instEpoch = instanceEpoch
         guard running[taskId] != nil else { return }
         let synced = await syncRunningInternal()
-        guard running[taskId] != nil else { return }
+        guard instEpoch == instanceEpoch, running[taskId] != nil else { return }
 
         let still = !synced || serverRunning.values.contains { $0.taskId == taskId }
         if still {
@@ -413,17 +459,18 @@ extension AppState {
             reconnects[taskId] = n
             let delay = UInt64(min(1 << min(n - 1, 3), 8)) * 1_000_000_000
             try? await Task.sleep(nanoseconds: delay)
-            guard let rt = running[taskId] else { return }
+            guard instEpoch == instanceEpoch, let rt = running[taskId] else { return }
             // 重连前先通过权威回放补齐断线期间遗漏的事件，若服务端已结束则直接落地完成态
             if let target = replayTargetId(forSessionKey: rt.sessionId, taskId: taskId, conversationId: rt.conversationId),
                let events = await reconcile(sessionId: target, localKey: rt.sessionId) {
+                guard instEpoch == instanceEpoch else { return }
                 if hasTaskEnded(events, taskId: taskId) {
                     finish(taskId: taskId, needsImmediateReconcile: false)
                     return
                 }
                 received[taskId] = replayedEventCount(events, taskId: taskId)
             }
-            guard running[taskId] != nil else { return }
+            guard instEpoch == instanceEpoch, running[taskId] != nil else { return }
             listen(taskId: taskId)
         } else {
             reconnects.removeValue(forKey: taskId)
@@ -492,11 +539,12 @@ extension AppState {
         }
 
         let target = replayTargetId(forSessionKey: sid, taskId: taskId, conversationId: convId)
+        let instEpoch = instanceEpoch
         Task { @MainActor [weak self] in
             if !needsImmediateReconcile {
                 try? await Task.sleep(nanoseconds: 350_000_000)
             }
-            guard let self else { return }
+            guard let self, self.instanceEpoch == instEpoch else { return }
             if let target, self.running[taskId] == nil {
                 await self.reconcileWithRetry(
                     targetId: target,
@@ -504,7 +552,9 @@ extension AppState {
                     expectedFinishedTaskId: taskId
                 )
             }
+            guard self.instanceEpoch == instEpoch else { return }
             await self.refreshSessions()
+            guard self.instanceEpoch == instEpoch else { return }
             self.bindDraftSessionIfAvailable(conversationId: convId)
         }
     }
@@ -558,6 +608,7 @@ extension AppState {
         let oldDraftKey = draftSessionKey
         currentSession = matched
         if let mc = matched.conversationId { conversationId = mc }
+        UserDefaults.standard.set(matched.id, forKey: lastSessionStorageKey)
         UserDefaults.standard.set(matched.id, forKey: "agy_last_session")
         sessionItems[matched.id] = items
         sessionItems.removeValue(forKey: oldDraftKey)
@@ -568,15 +619,18 @@ extension AppState {
         localKey: String? = nil,
         expectedFinishedTaskId: String? = nil
     ) async {
+        let instEpoch = instanceEpoch
         let backoffNs: [UInt64] = [0, 600_000_000, 1_400_000_000, 2_500_000_000]
         for delay in backoffNs {
             if delay > 0 {
                 try? await Task.sleep(nanoseconds: delay)
             }
+            guard instEpoch == instanceEpoch else { return }
             if let expTid = expectedFinishedTaskId, running[expTid] != nil {
                 return
             }
             if let events = await reconcile(sessionId: targetId, localKey: localKey) {
+                guard instEpoch == instanceEpoch else { return }
                 if let expTid = expectedFinishedTaskId {
                     if hasTaskEnded(events, taskId: expTid) {
                         reconciledTaskIds.insert(expTid)
@@ -592,7 +646,9 @@ extension AppState {
 
     @discardableResult
     func reconcile(sessionId sid: String, localKey: String? = nil) async -> [ChatEvent]? {
+        let instEpoch = instanceEpoch
         guard let events = try? await api.replay(sid) else { return nil }
+        guard instEpoch == instanceEpoch else { return nil }
         let isActive = matchesActiveSession(sid, localKey: localKey)
         if isActive, conversationId == nil,
            let foundCid = events.reversed().compactMap(\.conversationId).first(where: { !$0.isEmpty }) {
@@ -607,6 +663,13 @@ extension AppState {
         }
         if let curId = currentSession?.id, isActive {
             sessionItems[curId] = snapshot
+        }
+        // 同步更新正在跑的匹配任务缓冲并清空未刷盘 pendingText，彻底杜绝回放后正文重复拼接或切回旧缓冲
+        for (tid, rt) in running {
+            if rt.sessionId == sid || rt.sessionId == localKey || rt.conversationId == sid || tid == sid {
+                pendingText[tid] = ""
+                taskBuffers[tid] = snapshot
+            }
         }
         if isActive {
             items = snapshot

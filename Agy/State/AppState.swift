@@ -69,7 +69,10 @@ final class AppState: ObservableObject {
     var draftSessionKey = "draft-\(UUID().uuidString)"
     var assistantIndex: Int?
     var titleMemo: [String: (stamp: Double, text: String)] = [:]
-    var lastQuotaSnapshot: QuotaResponse?
+    /// 切换实例世代号：所有异步响应返回时必须比对世代号，杜绝旧实例的延迟回包污染新实例
+    var instanceEpoch: Int = 0
+    @Published var lastQuotaSnapshot: QuotaResponse?
+    @Published var isLoadingModels = false
     var bgTaskId: UIBackgroundTaskIdentifier = .invalid
 
     // MARK: - 输入与跨会话草稿
@@ -196,27 +199,42 @@ final class AppState: ObservableObject {
         currentSession?.id ?? draftSessionKey
     }
 
+    var lastSessionStorageKey: String {
+        "agy_last_session::" + api.baseURLString
+    }
+
     // MARK: - 启动 / 登录 / 实例
 
     func bootstrap() async {
+        // 确保 APIClient 地址与当前选中实例严格对齐
+        if api.baseURLString != currentInstance.url {
+            api.setBase(currentInstance.url)
+        }
         loadModelForCurrentInstance()
         isBooting = api.isLoggedIn
         defer { isBooting = false }
-        // 模型列表放后台刷新，不阻塞冷启动与运行中任务续接
-        Task { await refreshModels() }
+
         guard api.isLoggedIn else {
             isLoggedIn = false
             LiveActivityManager.shared.endAllImmediately()
             return
         }
-        let ok = await api.checkSession()
-        if ok {
+
+        let epoch = instanceEpoch
+        let status = await api.checkSessionStatus(timeout: 8)
+        guard epoch == instanceEpoch else { return }
+
+        switch status {
+        case .valid:
             isLoggedIn = true
+            async let mdlTask: Void = refreshModels(force: false, forEpoch: epoch)
             async let sTask: Void = refreshSessions()
             async let mTask: Void = syncSessionMeta()
             async let rTask: Void = syncRunning()
-            async let qTask: Void = prefetchQuotaForWidget()
-            _ = await (sTask, mTask, rTask, qTask)
+            async let qTask: Void = prefetchQuotaForWidget(force: false, forEpoch: epoch)
+            async let jTask: Void = refreshJobs()
+            _ = await (mdlTask, sTask, mTask, rTask, qTask, jTask)
+            guard epoch == instanceEpoch else { return }
 
             // 若服务端有正在执行的任务，冷启动（划掉 App 重进）直接自动续接该会话并挂上实时 SSE
             if await resumeActiveRunningSessionIfNeeded() {
@@ -228,10 +246,16 @@ final class AppState: ObservableObject {
             conversationId = nil
             items = []
             syncWidgetSnapshot()
-        } else {
+
+        case .unauthorized:
             api.setToken(nil)
             isLoggedIn = false
             LiveActivityManager.shared.endAllImmediately()
+
+        case .unreachable:
+            // 网络短暂不可达时不误删有效 Keychain Token，保留登录态等待切回前台/轮询自动恢复
+            isLoggedIn = true
+            showToast("网络暂时不可用，恢复后自动同步")
         }
     }
 
@@ -239,7 +263,8 @@ final class AppState: ObservableObject {
     @discardableResult
     func resumeActiveRunningSessionIfNeeded() async -> Bool {
         guard !serverRunning.isEmpty else { return false }
-        let lastSid = UserDefaults.standard.string(forKey: "agy_last_session")
+        let lastSid = UserDefaults.standard.string(forKey: lastSessionStorageKey)
+            ?? UserDefaults.standard.string(forKey: "agy_last_session")
         let sortedRunning = serverRunning.values.sorted { ($0.started ?? 0) > ($1.started ?? 0) }
 
         // 优先续接划掉 App 前正在看的那个运行中会话，其次取最新启动的运行中任务
@@ -283,30 +308,83 @@ final class AppState: ObservableObject {
         isLoggingIn = true
         loginError = nil
         defer { isLoggingIn = false }
+        let epoch = instanceEpoch
         do {
             _ = try await api.login(password: password)
+            guard epoch == instanceEpoch else { return }
             isLoggedIn = true
-            await refreshModels()
-            await syncSessionMeta()
-            await refreshSessions()
-            await prefetchQuotaForWidget()
+            async let mdlTask: Void = refreshModels(force: true, forEpoch: epoch)
+            async let mTask: Void = syncSessionMeta()
+            async let sTask: Void = refreshSessions()
+            async let rTask: Void = syncRunning()
+            async let qTask: Void = prefetchQuotaForWidget(force: true, forEpoch: epoch)
+            async let jTask: Void = refreshJobs()
+            _ = await (mdlTask, mTask, sTask, rTask, qTask, jTask)
+            guard epoch == instanceEpoch else { return }
             syncWidgetSnapshot()
-            if let first = sessions.first { await open(first) }
+            startRunningPoller()
+            if !(await resumeActiveRunningSessionIfNeeded()), let first = sessions.first {
+                await open(first)
+            }
         } catch {
             loginError = error.localizedDescription
         }
     }
 
-    func logout() {
-        api.setToken(nil)
-        isLoggedIn = false
+    /// 彻底清空与当前实例绑定的全部运行态、流连接、会话、模型与用量缓存
+    private func resetInstanceScopedState() {
+        for rt in running.values {
+            rt.stream?.cancel()
+        }
+        runningPoller?.cancel()
+        runningPoller = nil
+
+        running = [:]
+        serverRunning = [:]
+        taskBuffers = [:]
+        pendingText = [:]
+        flushScheduled = []
+        reconnects = [:]
+        received = [:]
+        lastStreamActivity = [:]
+        streamEpoch = [:]
+        lastRemoteReconcile = [:]
+        remoteRecoveryInFlight = []
+        reconciledTaskIds = []
+        lastActiveTaskId = nil
+        draftSessionKey = "draft-\(UUID().uuidString)"
+
         sessions = []
-        items = []
         currentSession = nil
         conversationId = nil
+        items = []
+        assistantIndex = nil
+        loadingSession = nil
+        sessionItems = [:]
+        sessionMeta = .empty
+        pinnedIds = []
+        customTitles = [:]
+        titleMemo = [:]
+        searchResults = []
+        isSearchingFullText = false
+        pendingPrompts = [:]
+        pendingUndoTransfer = nil
+
         jobs = []
+        skills = []
+        skillsCatalog = []
+        lastQuotaSnapshot = nil
+        modelOptions = AppState.models
+
         endBackgroundGraceTask()
         LiveActivityManager.shared.endAllImmediately()
+    }
+
+    func logout() {
+        instanceEpoch &+= 1
+        api.setToken(nil)
+        isLoggedIn = false
+        resetInstanceScopedState()
         syncWidgetSnapshot()
     }
 
@@ -332,32 +410,71 @@ final class AppState: ObservableObject {
     }
 
     func switchInstance(_ inst: Instance) async {
-        if let cur = currentSession?.id { sessionItems[cur] = items }
-        let willHaveToken = APIClient.hasStoredToken(for: inst.url)
+        // 点击当前已在线实例时，直接强制刷新模型、用量与会话，不做闪烁重置
+        if inst.id == currentInstanceId && api.baseURLString == inst.url && isLoggedIn {
+            let epoch = instanceEpoch
+            async let mdlTask: Void = refreshModels(force: true, forEpoch: epoch)
+            async let qTask: Void = prefetchQuotaForWidget(force: true, forEpoch: epoch)
+            async let sTask: Void = refreshSessions()
+            async let rTask: Void = syncRunning()
+            _ = await (mdlTask, qTask, sTask, rTask)
+            syncWidgetSnapshot()
+            showToast("已刷新 \(inst.name)")
+            return
+        }
+
+        let prevToken = api.token
+        instanceEpoch &+= 1
+        let epoch = instanceEpoch
+
+        resetInstanceScopedState()
         currentInstanceId = inst.id
         api.setBase(inst.url)
         loadModelForCurrentInstance()
-        await refreshModels()
 
-        sessions = []
-        currentSession = nil
-        conversationId = nil
-        items = []
-        assistantIndex = nil
-        isLoggedIn = false
-        if willHaveToken { isBooting = true }
-        let ok = await api.checkSession()
-        isBooting = false
-        if ok {
-            isLoggedIn = true
-            await syncSessionMeta()
-            await refreshSessions()
-            await prefetchQuotaForWidget()
-            syncWidgetSnapshot()
-            if let first = sessions.first { await open(first) }
+        // 若目标实例暂无独立 Token，先尝试复用前实例 Token（兼容共用同一 JWT 密钥的多机无缝切换）
+        var status: SessionCheckResult
+        if api.isLoggedIn {
+            status = await api.checkSessionStatus(timeout: 8)
+        } else if let prevToken, !prevToken.isEmpty {
+            let probe = await api.checkSessionStatus(timeout: 8, overrideToken: prevToken)
+            if probe == .valid {
+                api.setToken(prevToken)
+            }
+            status = probe
         } else {
+            status = .unauthorized
+        }
+
+        guard epoch == instanceEpoch else { return }
+
+        switch status {
+        case .valid:
+            isLoggedIn = true
+            async let mdlTask: Void = refreshModels(force: true, forEpoch: epoch)
+            async let mTask: Void = syncSessionMeta()
+            async let sTask: Void = refreshSessions()
+            async let rTask: Void = syncRunning()
+            async let qTask: Void = prefetchQuotaForWidget(force: true, forEpoch: epoch)
+            async let jTask: Void = refreshJobs()
+            _ = await (mdlTask, mTask, sTask, rTask, qTask, jTask)
+            guard epoch == instanceEpoch else { return }
+            syncWidgetSnapshot()
+            startRunningPoller()
+            if !(await resumeActiveRunningSessionIfNeeded()), let first = sessions.first {
+                await open(first)
+            }
+            showToast("已切换至 \(inst.name)")
+
+        case .unauthorized:
             api.setToken(nil)
             isLoggedIn = false
+            syncWidgetSnapshot()
+
+        case .unreachable:
+            isLoggedIn = api.isLoggedIn
+            syncWidgetSnapshot()
+            showToast("无法连接到 \(inst.name)，请检查网络")
         }
     }
 
@@ -381,9 +498,10 @@ final class AppState: ObservableObject {
 
     func removeInstance(_ inst: Instance) {
         guard instances.count > 1 else { showToast("至少保留一个实例"); return }
+        let wasCurrent = (currentInstanceId == inst.id)
         instances.removeAll { $0.id == inst.id }
-        if currentInstanceId == inst.id {
-            currentInstanceId = instances[0].id
+        if wasCurrent, let next = instances.first {
+            Task { await switchInstance(next) }
         }
     }
 
@@ -413,8 +531,14 @@ final class AppState: ObservableObject {
         model = saved ?? "gemini-3.8-flash-high"
     }
 
-    func refreshModels() async {
-        guard let list = try? await api.models(), !list.isEmpty else { return }
+    func refreshModels(force: Bool = false, forEpoch: Int? = nil) async {
+        let epoch = forEpoch ?? instanceEpoch
+        isLoadingModels = true
+        defer {
+            if epoch == instanceEpoch { isLoadingModels = false }
+        }
+        guard let list = try? await api.models(force: force), !list.isEmpty else { return }
+        guard epoch == instanceEpoch else { return }
         let opts = list.map { m in
             ModelOption(id: m.id, name: Self.prettyName(m.name), short: Self.shortName(m.name))
         }
@@ -447,9 +571,12 @@ final class AppState: ObservableObject {
         }
     }
 
-    func prefetchQuotaForWidget() async {
-        if let q = try? await api.quota() {
+    func prefetchQuotaForWidget(force: Bool = false, forEpoch: Int? = nil) async {
+        let epoch = forEpoch ?? instanceEpoch
+        if let q = try? await api.quota(force: force) {
+            guard epoch == instanceEpoch else { return }
             lastQuotaSnapshot = q
+            syncWidgetSnapshot()
         }
     }
 
@@ -467,6 +594,8 @@ final class AppState: ObservableObject {
         let primaryWindow = lastQuotaSnapshot?.groups?.first?.windows.first(where: { $0.remaining != nil })
         let quotaItem: AgyWidgetQuotaItem? = primaryWindow.flatMap { w in
             w.remaining.map { AgyWidgetQuotaItem(label: w.label, remaining: $0) }
+        } ?? lastQuotaSnapshot?.buckets?.first(where: { $0.remaining != nil }).flatMap { b in
+            b.remaining.map { AgyWidgetQuotaItem(label: b.label, remaining: $0) }
         }
 
         let snap = AgySharedSnapshot(
