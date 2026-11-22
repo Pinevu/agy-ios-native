@@ -350,7 +350,7 @@ struct CodeBlockView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.borderless)
             }
             .padding(.horizontal, 11)
             .padding(.vertical, 8)

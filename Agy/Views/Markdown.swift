@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // MARK: - 块级解析
 
@@ -437,7 +438,8 @@ struct FlowLayout: Layout {
     var lineSpacing: CGFloat = 7
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let maxW = proposal.width ?? 320
+        let rawW = proposal.width
+        let maxW = (rawW != nil && rawW!.isFinite && rawW! > 20) ? rawW! : max(200, UIScreen.main.bounds.width - 32)
         var x: CGFloat = 0, y: CGFloat = 0, lineH: CGFloat = 0
         for sv in subviews {
             let s = sv.sizeThatFits(.unspecified)

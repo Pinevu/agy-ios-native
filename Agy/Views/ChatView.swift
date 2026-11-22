@@ -592,58 +592,71 @@ struct ChatView: View {
 
     private var messageList: some View {
         ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
-                    if state.items.isEmpty {
+            List {
+                if state.items.isEmpty {
+                    Group {
                         if state.loadingSession != nil {
                             loadingState
                         } else {
                             emptyState
                         }
                     }
-                    let units = displayUnits
-                    let lastId = units.last?.id
-                    ForEach(units) { unit in
-                        ChatUnitRow(
-                            unit: unit,
-                            isLive: state.isCurrentTaskRunning && lastId == unit.id,
-                            speakingItemId: speech.speakingItemId,
-                            menu: assistantMenu,
-                            onMenu: { assistantMenu = $0 },
-                            actions: rowActions
-                        )
-                        .equatable()
-                    }
-                    if state.isCurrentTaskRunning {
-                        HStack(spacing: 7) {
-                            ProgressView().scaleEffect(0.7)
-                            Text(state.items.isEmpty ? "正在准备…" : "正在思考与执行…")
-                                .font(.system(size: 12.5))
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.vertical, 4)
-                        .id("running")
-                    }
-                    Color.clear
-                        .frame(height: 8)
-                        .id("bottom-sentinel")
-                        .onAppear {
-                            if showBackToBottom { withAnimation(.easeOut(duration: 0.18)) { showBackToBottom = false } }
-                            stickBottom = true
-                        }
-                        .onDisappear {
-                            // 仍在贴底跟随但底部锚点被挤出视口（流式变高、回放补齐或布局重算）→ 立即拉回，杜绝白屏
-                            guard stickBottom && !state.items.isEmpty else { return }
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.14) {
-                                guard stickBottom else { return }
-                                withAnimation(nil) { proxy.scrollTo("bottom-sentinel", anchor: .bottom) }
-                            }
-                        }
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets(top: 14, leading: 16, bottom: 14, trailing: 16))
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 14)
-                .padding(.bottom, 20)
+
+                let units = displayUnits
+                let lastId = units.last?.id
+                ForEach(units) { unit in
+                    ChatUnitRow(
+                        unit: unit,
+                        isLive: state.isCurrentTaskRunning && lastId == unit.id,
+                        speakingItemId: speech.speakingItemId,
+                        menu: assistantMenu,
+                        onMenu: { assistantMenu = $0 },
+                        actions: rowActions
+                    )
+                    .equatable()
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                }
+
+                if state.isCurrentTaskRunning {
+                    HStack(spacing: 7) {
+                        ProgressView().scaleEffect(0.7)
+                        Text(state.items.isEmpty ? "正在准备…" : "正在思考与执行…")
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(.secondary)
+                        Spacer(minLength: 0)
+                    }
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                    .id("running")
+                }
+
+                Color.clear
+                    .frame(height: 12)
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 8, trailing: 0))
+                    .id("bottom-sentinel")
+                    .onAppear {
+                        if showBackToBottom { withAnimation(.easeOut(duration: 0.18)) { showBackToBottom = false } }
+                        stickBottom = true
+                    }
+                    .onDisappear {
+                        if !stickBottom && !showBackToBottom {
+                            withAnimation(.easeOut(duration: 0.18)) { showBackToBottom = true }
+                        }
+                    }
             }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .environment(\.defaultMinListRowHeight, 8)
+            .background(Color(.systemBackground))
             .simultaneousGesture(
                 DragGesture(minimumDistance: 12)
                     .onEnded { value in
@@ -673,6 +686,8 @@ struct ChatView: View {
             }
             .onChange(of: state.isCurrentTaskRunning) { running in
                 if running {
+                    stickBottom = true
+                    showBackToBottom = false
                     DispatchQueue.main.async {
                         withAnimation(nil) { proxy.scrollTo("bottom-sentinel", anchor: .bottom) }
                     }
@@ -685,7 +700,7 @@ struct ChatView: View {
                 guard stickBottom else { return }
                 let now = Date()
                 trailingScrollTask?.cancel()
-                if now.timeIntervalSince(lastStreamScroll) > 0.10 {
+                if now.timeIntervalSince(lastStreamScroll) > 0.12 {
                     lastStreamScroll = now
                     DispatchQueue.main.async {
                         withAnimation(nil) { proxy.scrollTo("bottom-sentinel", anchor: .bottom) }
@@ -693,7 +708,7 @@ struct ChatView: View {
                 } else {
                     // 尾部补滚：绝不丢掉最后一段输出或回放结束时的滚底事件
                     trailingScrollTask = Task { @MainActor in
-                        try? await Task.sleep(nanoseconds: 120_000_000)
+                        try? await Task.sleep(nanoseconds: 140_000_000)
                         guard !Task.isCancelled, stickBottom else { return }
                         lastStreamScroll = Date()
                         withAnimation(nil) { proxy.scrollTo("bottom-sentinel", anchor: .bottom) }
@@ -753,8 +768,9 @@ struct ChatView: View {
                     Button {
                         guard let i = prevIndex() else { return }
                         turnCursor = i
+                        stickBottom = false
                         withAnimation(.easeInOut(duration: 0.24)) {
-                            proxy.scrollTo(userTurns[i].1.id, anchor: UnitPoint(x: 0.5, y: 0.06))
+                            proxy.scrollTo(userTurns[i].1.id, anchor: .top)
                         }
                     } label: {
                         fabIcon("chevron.up", disabled: !canUp)
@@ -769,7 +785,7 @@ struct ChatView: View {
                         guard let i = nextIndex() else { return }
                         turnCursor = i
                         withAnimation(.easeInOut(duration: 0.24)) {
-                            proxy.scrollTo(userTurns[i].1.id, anchor: UnitPoint(x: 0.5, y: 0.06))
+                            proxy.scrollTo(userTurns[i].1.id, anchor: .top)
                         }
                     } label: {
                         fabIcon("chevron.down", disabled: !canDown)

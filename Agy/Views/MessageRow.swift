@@ -94,7 +94,7 @@ struct MessageRow: View {
                     .font(.system(size: 11.5))
                     .foregroundStyle(.tertiary)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.borderless)
 
             if let onSpeak = actions.speak {
                 Button {
@@ -105,7 +105,7 @@ struct MessageRow: View {
                         .font(.system(size: 11.5))
                         .foregroundStyle(isSpeaking ? Color.accentColor : Color(.tertiaryLabel))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.borderless)
             }
 
             Button {
@@ -117,7 +117,7 @@ struct MessageRow: View {
                     .padding(.vertical, 2)
                     .padding(.horizontal, 4)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.borderless)
 
             Spacer(minLength: 0)
         }
@@ -290,7 +290,7 @@ struct ToolGroupView: View {
                             .stroke(Color(.separator).opacity(0.28), lineWidth: 0.6)
                     )
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.borderless)
             } else {
                 // 运行中（折叠过早步骤）或已手动展开
                 let split = liveSplit
@@ -311,7 +311,7 @@ struct ToolGroupView: View {
                         .background(Color(.secondarySystemBackground).opacity(0.75),
                                     in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.borderless)
                 } else if expanded {
                     Button {
                         withAnimation(.easeInOut(duration: 0.18)) { expanded = false }
@@ -326,7 +326,7 @@ struct ToolGroupView: View {
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 4)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.borderless)
                 }
 
                 ForEach(split.visibleItems) { child in
@@ -398,7 +398,7 @@ struct ToolCardView: View {
                 .padding(.vertical, 9)
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.borderless)
 
             if expanded {
                 Divider().opacity(0.5)

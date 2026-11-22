@@ -12,8 +12,9 @@ struct SelectableText: UIViewRepresentable {
     func makeUIView(context: Context) -> SelectableLabel {
         let v = SelectableLabel()
         v.backgroundColor = .clear
-        // 与正文一致的基础字号，属性缺失时也不会掉回 17pt
+        // 与正文一致的基础字号与系统自适应颜色
         v.font = .systemFont(ofSize: Self.baseFontSize)
+        v.textColor = .label
         v.isEditable = false
         v.isSelectable = true
         v.isScrollEnabled = false
@@ -39,8 +40,9 @@ struct SelectableText: UIViewRepresentable {
         if uiView.attributedText.isEqual(to: normalized) { return }
         uiView.attributedText = normalized
         context.coordinator.applied = normalized
-        // 文本变了，旧的测量结果立即作废，否则行高会沿用上一段文字的尺寸
+        // 文本变了，旧的测量结果立即作废，并通知 UICollectionView/List 重新自适配行高
         context.coordinator.invalidateMeasurement()
+        uiView.invalidateIntrinsicContentSize()
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: SelectableLabel, context: Context) -> CGSize? {
