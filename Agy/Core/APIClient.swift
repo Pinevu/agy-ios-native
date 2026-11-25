@@ -100,7 +100,8 @@ final class APIClient {
         _ path: String,
         queryItems: [URLQueryItem]? = nil,
         method: String = "GET",
-        body: Data? = nil
+        body: Data? = nil,
+        timeout: TimeInterval? = nil
     ) -> URLRequest {
         let url: URL
         if let queryItems, !queryItems.isEmpty,
@@ -112,6 +113,9 @@ final class APIClient {
         }
         var req = URLRequest(url: url)
         req.httpMethod = method
+        if let timeout {
+            req.timeoutInterval = timeout
+        }
         if body != nil {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
@@ -126,9 +130,10 @@ final class APIClient {
         _ path: String,
         queryItems: [URLQueryItem]? = nil,
         method: String = "GET",
-        body: Data? = nil
+        body: Data? = nil,
+        timeout: TimeInterval? = nil
     ) async throws -> (Data, HTTPURLResponse) {
-        let req = makeRequest(path, queryItems: queryItems, method: method, body: body)
+        let req = makeRequest(path, queryItems: queryItems, method: method, body: body, timeout: timeout)
         let (data, resp) = try await session.data(for: req)
         guard let http = resp as? HTTPURLResponse else { throw APIError.server("无响应") }
         if http.statusCode == 401 {
@@ -148,9 +153,10 @@ final class APIClient {
         queryItems: [URLQueryItem]? = nil,
         method: String = "GET",
         body: Data? = nil,
+        timeout: TimeInterval? = nil,
         as type: T.Type
     ) async throws -> T {
-        let (data, _) = try await sendRaw(path, queryItems: queryItems, method: method, body: body)
+        let (data, _) = try await sendRaw(path, queryItems: queryItems, method: method, body: body, timeout: timeout)
         do {
             return try decoder.decode(T.self, from: data)
         } catch {
@@ -203,11 +209,20 @@ final class APIClient {
         try await send("api/replay/\(id)", as: [ChatEvent].self)
     }
 
-    func run(prompt: String, model: String?, conversationId: String?, sessionId: String?) async throws -> (id: String, conversationId: String?) {
+    func run(
+        prompt: String,
+        model: String?,
+        conversationId: String?,
+        sessionId: String?,
+        effort: String? = nil,
+        mode: String? = nil
+    ) async throws -> (id: String, conversationId: String?) {
         var payload: [String: Any] = ["prompt": prompt]
         if let m = model { payload["model"] = m }
         if let c = conversationId { payload["conversation_id"] = c }
         if let s = sessionId { payload["session_id"] = s }
+        if let e = effort, !e.isEmpty { payload["effort"] = e }
+        if let md = mode, !md.isEmpty, md != "auto" { payload["mode"] = md }
         let body = try JSONSerialization.data(withJSONObject: payload)
         let r = try await send("api/run", method: "POST", body: body, as: RunResponse.self)
         guard let id = r.id else { throw APIError.server(r.error ?? "任务创建失败") }
@@ -360,6 +375,65 @@ final class APIClient {
 
     func deleteJob(_ id: String) async throws {
         _ = try await send("api/jobs/\(id)", method: "DELETE", as: EmptyResponse.self)
+    }
+
+    // MARK: - 环境变量 / MCP 服务器 / Agent 记忆设定
+
+    func envVars() async throws -> EnvVarsResponse {
+        try await send("api/env", as: EnvVarsResponse.self)
+    }
+
+    func postEnv(_ payload: [String: Any]) async throws -> EnvVarsResponse {
+        let body = try JSONSerialization.data(withJSONObject: payload)
+        return try await send("api/env", method: "POST", body: body, as: EnvVarsResponse.self)
+    }
+
+    func deleteEnv(_ idOrKey: String) async throws -> EnvVarsResponse {
+        let safe = idOrKey.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? idOrKey
+        return try await send("api/env/\(safe)", method: "DELETE", as: EnvVarsResponse.self)
+    }
+
+    func mcpList() async throws -> MCPListResponse {
+        try await send("api/mcp", as: MCPListResponse.self)
+    }
+
+    func upsertMCP(_ payload: [String: Any]) async throws -> MCPListResponse {
+        let body = try JSONSerialization.data(withJSONObject: payload)
+        return try await send("api/mcp", method: "POST", body: body, as: MCPListResponse.self)
+    }
+
+    func importMCPJSON(_ rawJSON: String) async throws -> MCPListResponse {
+        let body = try JSONSerialization.data(withJSONObject: ["json": rawJSON])
+        return try await send("api/mcp/import", method: "POST", body: body, as: MCPListResponse.self)
+    }
+
+    func toggleMCP(_ id: String) async throws -> MCPListResponse {
+        let safe = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        return try await send("api/mcp/\(safe)/toggle", method: "POST", body: Data("{}".utf8), as: MCPListResponse.self)
+    }
+
+    func deleteMCP(_ id: String) async throws -> MCPListResponse {
+        let safe = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        return try await send("api/mcp/\(safe)", method: "DELETE", as: MCPListResponse.self)
+    }
+
+    func probeMCP(_ id: String) async throws -> MCPProbeResponse {
+        let safe = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        return try await send("api/mcp/\(safe)/test", method: "POST", body: Data("{}".utf8), timeout: 30, as: MCPProbeResponse.self)
+    }
+
+    func agentMemory() async throws -> AgentMemoryResponse {
+        try await send("api/agent/memory", as: AgentMemoryResponse.self)
+    }
+
+    func saveAgentMemory(_ payload: [String: Any]) async throws -> AgentMemoryResponse {
+        let body = try JSONSerialization.data(withJSONObject: payload)
+        return try await send("api/agent/memory", method: "POST", body: body, as: AgentMemoryResponse.self)
+    }
+
+    func deleteAgentMemoryFile(_ name: String) async throws -> AgentMemoryResponse {
+        let safe = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
+        return try await send("api/agent/memory/\(safe)", method: "DELETE", as: AgentMemoryResponse.self)
     }
 
     // MARK: - 上传

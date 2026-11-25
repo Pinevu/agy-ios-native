@@ -39,11 +39,27 @@ final class AppState: ObservableObject {
     @Published var searchResults: [SearchResultItem] = []
     @Published var isSearchingFullText = false
 
-    // MARK: - 定时任务 & 技能
+    // MARK: - 定时任务 & 技能 & Agent 扩展（环境变量 / MCP / 记忆 / 推理参数）
     @Published var jobs: [ScheduledJob] = []
     @Published var isLoadingJobs = false
     @Published var skills: [Skill] = []
     @Published var skillsCatalog: [SkillCatalogItem] = []
+
+    @Published var envVars: [EnvVarItem] = []
+    @Published var envPrivacyMode: Bool = false
+    @Published var mcpServers: [MCPServerItem] = []
+    @Published var mcpPresets: [MCPServerItem] = []
+
+    @Published var agentMemoryEnabled: Bool = true
+    @Published var agentInjectNotes: Bool = true
+    @Published var agentSoul: AgentSoulConfig = .empty
+    @Published var globalMemory: String = ""
+    @Published var memoryFiles: [MemoryNoteFile] = []
+    @Published var memoryCharCount: Int = 0
+    @Published var memoryCharLimit: Int = 22000
+
+    @Published var reasoningEffort: String = ""
+    @Published var agentMode: String = "auto"
 
     // MARK: - 运行态
     @Published var running: [String: RunningTask] = [:]
@@ -233,7 +249,9 @@ final class AppState: ObservableObject {
             async let rTask: Void = syncRunning()
             async let qTask: Void = prefetchQuotaForWidget(force: false, forEpoch: epoch)
             async let jTask: Void = refreshJobs()
-            _ = await (mdlTask, sTask, mTask, rTask, qTask, jTask)
+            async let skTask: Void = refreshSkills()
+            async let capTask: Void = refreshAgentCapabilities(forEpoch: epoch)
+            _ = await (mdlTask, sTask, mTask, rTask, qTask, jTask, skTask, capTask)
             guard epoch == instanceEpoch else { return }
 
             // 若服务端有正在执行的任务，冷启动（划掉 App 重进）直接自动续接该会话并挂上实时 SSE
@@ -319,7 +337,9 @@ final class AppState: ObservableObject {
             async let rTask: Void = syncRunning()
             async let qTask: Void = prefetchQuotaForWidget(force: true, forEpoch: epoch)
             async let jTask: Void = refreshJobs()
-            _ = await (mdlTask, mTask, sTask, rTask, qTask, jTask)
+            async let skTask: Void = refreshSkills()
+            async let capTask: Void = refreshAgentCapabilities(forEpoch: epoch)
+            _ = await (mdlTask, mTask, sTask, rTask, qTask, jTask, skTask, capTask)
             guard epoch == instanceEpoch else { return }
             syncWidgetSnapshot()
             startRunningPoller()
@@ -373,6 +393,16 @@ final class AppState: ObservableObject {
         jobs = []
         skills = []
         skillsCatalog = []
+        envVars = []
+        envPrivacyMode = false
+        mcpServers = []
+        mcpPresets = []
+        agentMemoryEnabled = true
+        agentInjectNotes = true
+        agentSoul = .empty
+        globalMemory = ""
+        memoryFiles = []
+        memoryCharCount = 0
         lastQuotaSnapshot = nil
         modelOptions = AppState.models
 
@@ -417,7 +447,8 @@ final class AppState: ObservableObject {
             async let qTask: Void = prefetchQuotaForWidget(force: true, forEpoch: epoch)
             async let sTask: Void = refreshSessions()
             async let rTask: Void = syncRunning()
-            _ = await (mdlTask, qTask, sTask, rTask)
+            async let capTask: Void = refreshAgentCapabilities(forEpoch: epoch)
+            _ = await (mdlTask, qTask, sTask, rTask, capTask)
             syncWidgetSnapshot()
             showToast("已刷新 \(inst.name)")
             return
@@ -457,7 +488,9 @@ final class AppState: ObservableObject {
             async let rTask: Void = syncRunning()
             async let qTask: Void = prefetchQuotaForWidget(force: true, forEpoch: epoch)
             async let jTask: Void = refreshJobs()
-            _ = await (mdlTask, mTask, sTask, rTask, qTask, jTask)
+            async let skTask: Void = refreshSkills()
+            async let capTask: Void = refreshAgentCapabilities(forEpoch: epoch)
+            _ = await (mdlTask, mTask, sTask, rTask, qTask, jTask, skTask, capTask)
             guard epoch == instanceEpoch else { return }
             syncWidgetSnapshot()
             startRunningPoller()
@@ -520,15 +553,29 @@ final class AppState: ObservableObject {
     // MARK: - 模型管理
 
     private func modelKey(for url: String) -> String { "agy_model::" + url }
+    private func effortKey(for url: String) -> String { "agy_effort::" + url }
+    private func modeKey(for url: String) -> String { "agy_mode::" + url }
 
     func setModel(_ id: String) {
         model = id
         UserDefaults.standard.set(id, forKey: modelKey(for: api.baseURLString))
     }
 
+    func setReasoningEffort(_ val: String) {
+        reasoningEffort = val
+        UserDefaults.standard.set(val, forKey: effortKey(for: api.baseURLString))
+    }
+
+    func setAgentMode(_ val: String) {
+        agentMode = val
+        UserDefaults.standard.set(val, forKey: modeKey(for: api.baseURLString))
+    }
+
     func loadModelForCurrentInstance() {
         let saved = UserDefaults.standard.string(forKey: modelKey(for: api.baseURLString))
         model = saved ?? "gemini-3.8-flash-high"
+        reasoningEffort = UserDefaults.standard.string(forKey: effortKey(for: api.baseURLString)) ?? ""
+        agentMode = UserDefaults.standard.string(forKey: modeKey(for: api.baseURLString)) ?? "auto"
     }
 
     func refreshModels(force: Bool = false, forEpoch: Int? = nil) async {

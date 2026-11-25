@@ -12,6 +12,9 @@ final class DeepLinkRouter: ObservableObject {
         case voice
         case jobs
         case skills
+        case mcp
+        case env
+        case memory
         case quota
     }
 
@@ -63,6 +66,12 @@ final class DeepLinkRouter: ObservableObject {
             enqueue(.jobs)
         case "skills":
             enqueue(.skills)
+        case "mcp":
+            enqueue(.mcp)
+        case "env":
+            enqueue(.env)
+        case "memory", "soul":
+            enqueue(.memory)
         case "quota":
             enqueue(.quota)
         default:

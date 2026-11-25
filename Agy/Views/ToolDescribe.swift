@@ -21,6 +21,15 @@ enum ToolDescribe {
         case "schedule": return "定时调度"
         case "manage_task": return "管理后台任务"
         default:
+            if name.hasPrefix("mcp__") {
+                let parts = name.dropFirst(5).components(separatedBy: "__")
+                if parts.count >= 2 {
+                    return "MCP · \(parts[0]) · \(parts.dropFirst().joined(separator: "/"))"
+                }
+            } else if name.hasPrefix("mcp_") {
+                let rest = String(name.dropFirst(4)).replacingOccurrences(of: "_", with: " ")
+                return "MCP · \(rest)"
+            }
             return name.replacingOccurrences(of: "_", with: " ")
         }
     }

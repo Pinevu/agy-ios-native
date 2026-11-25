@@ -314,7 +314,9 @@ extension AppState {
                 prompt: prompt,
                 model: model,
                 conversationId: conversationId,
-                sessionId: currentSession?.id
+                sessionId: currentSession?.id,
+                effort: reasoningEffort.isEmpty ? nil : reasoningEffort,
+                mode: agentMode == "auto" ? nil : agentMode
             )
             if let c = r.conversationId { conversationId = c }
             lastActiveTaskId = r.id

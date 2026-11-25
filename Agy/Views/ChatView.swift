@@ -213,6 +213,18 @@ struct ChatView: View {
                         SkillsSheet(onClose: {
                             withAnimation(.easeIn(duration: 0.22)) { chatSubpage = nil }
                         })
+                    case .mcp:
+                        MCPSheet(onClose: {
+                            withAnimation(.easeIn(duration: 0.22)) { chatSubpage = nil }
+                        })
+                    case .env:
+                        EnvVarsSheet(onClose: {
+                            withAnimation(.easeIn(duration: 0.22)) { chatSubpage = nil }
+                        })
+                    case .memory:
+                        AgentMemorySheet(onClose: {
+                            withAnimation(.easeIn(duration: 0.22)) { chatSubpage = nil }
+                        })
                     case .usage:
                         QuotaSheet(onClose: {
                             withAnimation(.easeIn(duration: 0.22)) { chatSubpage = nil }
@@ -393,6 +405,12 @@ struct ChatView: View {
             withAnimation(.easeOut(duration: 0.25)) { chatSubpage = .jobs }
         case .skills:
             withAnimation(.easeOut(duration: 0.25)) { chatSubpage = .skills }
+        case .mcp:
+            withAnimation(.easeOut(duration: 0.25)) { chatSubpage = .mcp }
+        case .env:
+            withAnimation(.easeOut(duration: 0.25)) { chatSubpage = .env }
+        case .memory:
+            withAnimation(.easeOut(duration: 0.25)) { chatSubpage = .memory }
         case .quota:
             withAnimation(.easeOut(duration: 0.25)) { chatSubpage = .usage }
         }
@@ -485,11 +503,27 @@ struct ChatView: View {
                     .lineLimit(1)
 
                 Button { showModelPicker = true } label: {
-                    HStack(spacing: 3) {
+                    HStack(spacing: 4) {
                         Text(state.currentModelName)
                             .font(.system(size: 11.5))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
+                        if state.agentMode == "plan" {
+                            Text("Plan")
+                                .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                                .foregroundStyle(.indigo)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(Color.indigo.opacity(0.14), in: Capsule())
+                        }
+                        if let eff = state.effortDisplayBadge {
+                            Text(eff)
+                                .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(Color.accentColor)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(Color.accentColor.opacity(0.13), in: Capsule())
+                        }
                         Image(systemName: "chevron.down")
                             .font(.system(size: 7, weight: .semibold))
                             .foregroundStyle(.tertiary)
@@ -863,7 +897,7 @@ struct ChatView: View {
 
     private var emptyState: some View {
         VStack(spacing: 14) {
-            Spacer(minLength: 60)
+            Spacer(minLength: 52)
             Image("AppLogo")
                 .resizable()
                 .scaledToFit()
@@ -872,12 +906,50 @@ struct ChatView: View {
                 .shadow(color: .black.opacity(0.08), radius: 10, y: 2)
             Text("有什么可以帮你的？")
                 .font(.system(size: 19, weight: .semibold))
-            Text("随时提问、语音输入、执行命令或管理定时任务")
+            Text("输入 / 唤出快捷指令、技能与 MCP 工具")
                 .font(.system(size: 13.5))
                 .foregroundStyle(.secondary)
-            Spacer(minLength: 60)
+
+            HStack(spacing: 8) {
+                emptyQuickPill("MCP (\(state.enabledMCPCount))", icon: "point.3.connected.trianglepath.dotted") {
+                    dismissKeyboard()
+                    withAnimation(.easeOut(duration: 0.25)) { chatSubpage = .mcp }
+                }
+                emptyQuickPill("环境变量 (\(state.enabledEnvCount))", icon: "key.radiowaves.forward") {
+                    dismissKeyboard()
+                    withAnimation(.easeOut(duration: 0.25)) { chatSubpage = .env }
+                }
+                emptyQuickPill("记忆设定", icon: "brain.head.profile") {
+                    dismissKeyboard()
+                    withAnimation(.easeOut(duration: 0.25)) { chatSubpage = .memory }
+                }
+                emptyQuickPill("/ 指令", icon: "terminal") {
+                    input = "/"
+                    inputFocused = true
+                }
+            }
+            .padding(.top, 4)
+
+            Spacer(minLength: 52)
         }
         .frame(maxWidth: .infinity)
+    }
+
+    private func emptyQuickPill(_ title: String, icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 11, weight: .medium))
+                Text(title)
+                    .font(.system(size: 11.5, weight: .medium))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 6)
+            .background(Color(.secondarySystemBackground), in: Capsule())
+        }
+        .buttonStyle(.borderless)
     }
 
     // MARK: - 撤回草稿转移条
@@ -918,8 +990,258 @@ struct ChatView: View {
         }
     }
 
+    // MARK: - 斜杠指令面板（参考 OpenMinis SlashCommandPicker：内置命令 + 已装技能 + 已启用 MCP）
+
+    private struct SlashMenuItem: Identifiable {
+        let id: String
+        let trigger: String
+        let title: String
+        let subtitle: String
+        let icon: String
+        let tag: String?
+        let tagColor: Color
+        let run: () -> Void
+    }
+
+    private var activeSlashQuery: String? {
+        guard editingItem == nil else { return nil }
+        guard input.hasPrefix("/"), !input.contains("\n") else { return nil }
+        let after = String(input.dropFirst())
+        guard !after.contains(" ") else { return nil }
+        return after.lowercased()
+    }
+
+    private var slashMenuItems: [SlashMenuItem] {
+        guard let q = activeSlashQuery else { return [] }
+        var all: [SlashMenuItem] = [
+            SlashMenuItem(
+                id: "cmd-plan",
+                trigger: "/plan",
+                title: state.agentMode == "plan" ? "切回自动执行模式" : "切换为规划模式 (Plan)",
+                subtitle: "让 Agent 先输出结构化方案与推理步骤",
+                icon: "map",
+                tag: state.agentMode == "plan" ? "已开启" : "模式",
+                tagColor: .indigo
+            ) {
+                let next = state.agentMode == "plan" ? "auto" : "plan"
+                state.setAgentMode(next)
+                input = ""
+                state.showToast(next == "plan" ? "已开启 Plan 规划模式" : "已切回 Auto 自动执行模式")
+            },
+            SlashMenuItem(
+                id: "cmd-mcp",
+                trigger: "/mcp",
+                title: "管理 MCP 服务器",
+                subtitle: "已启用 \(state.enabledMCPCount) 个 · 支持 JSON 导入与握手探测",
+                icon: "point.3.connected.trianglepath.dotted",
+                tag: "面板",
+                tagColor: .blue
+            ) {
+                input = ""
+                dismissKeyboard()
+                withAnimation(.easeOut(duration: 0.25)) { chatSubpage = .mcp }
+            },
+            SlashMenuItem(
+                id: "cmd-env",
+                trigger: "/env",
+                title: "管理环境变量",
+                subtitle: "已启用 \(state.enabledEnvCount) 项 · 自动注入命令与 MCP",
+                icon: "key.radiowaves.forward",
+                tag: "面板",
+                tagColor: .orange
+            ) {
+                input = ""
+                dismissKeyboard()
+                withAnimation(.easeOut(duration: 0.25)) { chatSubpage = .env }
+            },
+            SlashMenuItem(
+                id: "cmd-memory",
+                trigger: "/memory",
+                title: "Agent 记忆与人格设定",
+                subtitle: "编辑全局 GEMINI.md 长期记忆与角色准则",
+                icon: "brain.head.profile",
+                tag: "面板",
+                tagColor: .purple
+            ) {
+                input = ""
+                dismissKeyboard()
+                withAnimation(.easeOut(duration: 0.25)) { chatSubpage = .memory }
+            },
+            SlashMenuItem(
+                id: "cmd-skills",
+                trigger: "/skills",
+                title: "打开技能商店",
+                subtitle: "已安装 \(state.skills.count) 个技能",
+                icon: "square.grid.2x2",
+                tag: "面板",
+                tagColor: .teal
+            ) {
+                input = ""
+                dismissKeyboard()
+                withAnimation(.easeOut(duration: 0.25)) { chatSubpage = .skills }
+            },
+            SlashMenuItem(
+                id: "cmd-new",
+                trigger: "/new",
+                title: "发起新对话",
+                subtitle: "清空当前上下文并开启新会话",
+                icon: "square.and.pencil",
+                tag: "会话",
+                tagColor: .secondary
+            ) {
+                input = ""
+                state.newSession()
+            },
+            SlashMenuItem(
+                id: "cmd-goal",
+                trigger: "/goal",
+                title: "长程目标深入执行",
+                subtitle: "插入 /goal 指令，让 Agent 持续推进直至达标",
+                icon: "flag.checkered",
+                tag: "CLI",
+                tagColor: .green
+            ) {
+                input = "/goal "
+                inputFocused = true
+            },
+            SlashMenuItem(
+                id: "cmd-boost",
+                trigger: "/boost",
+                title: "多维深度思考与验证",
+                subtitle: "插入 /boost 指令，启用严密方案推演与自检",
+                icon: "bolt.fill",
+                tag: "CLI",
+                tagColor: .orange
+            ) {
+                input = "/boost "
+                inputFocused = true
+            },
+            SlashMenuItem(
+                id: "cmd-compact",
+                trigger: "/compact",
+                title: "压缩会话上下文",
+                subtitle: "总结精简长对话历史，释放上下文窗口",
+                icon: "arrow.down.right.and.arrow.up.left",
+                tag: "CLI",
+                tagColor: .secondary
+            ) {
+                input = "/compact"
+                inputFocused = true
+            }
+        ]
+
+        for sk in state.skills {
+            all.append(SlashMenuItem(
+                id: "skill-\(sk.name)",
+                trigger: "/\(sk.name)",
+                title: sk.name,
+                subtitle: (sk.desc?.isEmpty == false) ? sk.desc! : "调用已安装技能 \(sk.name)",
+                icon: "sparkles",
+                tag: "技能",
+                tagColor: .teal
+            ) {
+                input = "/\(sk.name) "
+                inputFocused = true
+            })
+        }
+
+        for srv in state.mcpServers where srv.enabled {
+            all.append(SlashMenuItem(
+                id: "mcp-\(srv.id)",
+                trigger: "/\(srv.id)",
+                title: srv.id,
+                subtitle: srv.note?.isEmpty == false ? srv.note! : srv.summaryLine,
+                icon: "network",
+                tag: "MCP",
+                tagColor: .blue
+            ) {
+                input = "请使用 MCP 服务器「\(srv.id)」"
+                inputFocused = true
+            })
+        }
+
+        guard !q.isEmpty else { return Array(all.prefix(24)) }
+        return all.filter {
+            $0.trigger.dropFirst().lowercased().contains(q)
+            || $0.title.lowercased().contains(q)
+            || $0.subtitle.lowercased().contains(q)
+        }
+    }
+
+    @ViewBuilder
+    private var slashCommandBar: some View {
+        let items = slashMenuItems
+        if !items.isEmpty {
+            ScrollView {
+                VStack(spacing: 0) {
+                    ForEach(items) { item in
+                        Button {
+                            item.run()
+                        } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: item.icon)
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundStyle(item.tagColor)
+                                    .frame(width: 24, height: 24)
+                                    .background(item.tagColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+
+                                VStack(alignment: .leading, spacing: 1) {
+                                    HStack(spacing: 6) {
+                                        Text(item.trigger)
+                                            .font(.system(size: 13.5, weight: .semibold, design: .monospaced))
+                                            .foregroundStyle(.primary)
+                                        Text(item.title)
+                                            .font(.system(size: 13))
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                    }
+                                    Text(item.subtitle)
+                                        .font(.system(size: 11.5))
+                                        .foregroundStyle(.tertiary)
+                                        .lineLimit(1)
+                                }
+
+                                Spacer(minLength: 4)
+
+                                if let tag = item.tag {
+                                    Text(tag)
+                                        .font(.system(size: 10, weight: .semibold))
+                                        .foregroundStyle(item.tagColor)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(item.tagColor.opacity(0.12), in: Capsule())
+                                }
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+
+                        if item.id != items.last?.id {
+                            Divider().opacity(0.3).padding(.leading, 48)
+                        }
+                    }
+                }
+            }
+            .frame(maxHeight: min(CGFloat(items.count) * 52, 224))
+            .background(Color(.secondarySystemBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(Color.primary.opacity(0.1), lineWidth: 0.8)
+            )
+            .shadow(color: .black.opacity(0.08), radius: 10, y: -2)
+            .padding(.horizontal, 16)
+            .padding(.top, 6)
+            .transition(.opacity.combined(with: .move(edge: .bottom)))
+        }
+    }
+
     private var composer: some View {
         VStack(spacing: 0) {
+            slashCommandBar
+
             // 编辑态提示条
             if let editing = editingItem {
                 HStack(spacing: 8) {
@@ -1191,9 +1513,18 @@ struct ChatView: View {
 
     // MARK: - 运行中弹层 & 模型弹层
 
+    private static let effortChoices: [(id: String, label: String)] = [
+        ("", "默认"),
+        ("low", "Low"),
+        ("medium", "Med"),
+        ("high", "High"),
+        ("xhigh", "XHigh"),
+        ("max", "Max")
+    ]
+
     private var modelSheetHeight: CGFloat {
         let rows = CGFloat(state.modelOptions.count)
-        return min(56 + rows * 54 + 24, 560)
+        return min(168 + rows * 54 + 24, 620)
     }
 
     private var runningSheet: some View {
@@ -1349,6 +1680,52 @@ struct ChatView: View {
             .padding(.horizontal, 18)
             .padding(.top, 16)
             .padding(.bottom, 10)
+
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    Text("执行模式")
+                        .font(.system(size: 12.5, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Picker("执行模式", selection: Binding(
+                        get: { state.agentMode },
+                        set: { state.setAgentMode($0) }
+                    )) {
+                        Text("Auto 自动").tag("auto")
+                        Text("Plan 规划").tag("plan")
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 190)
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("推理强度 (--effort)")
+                        .font(.system(size: 12.5, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(Self.effortChoices, id: \.id) { opt in
+                                let selected = state.reasoningEffort == opt.id
+                                Button {
+                                    state.setReasoningEffort(opt.id)
+                                } label: {
+                                    Text(opt.label)
+                                        .font(.system(size: 12, weight: selected ? .semibold : .regular, design: .monospaced))
+                                        .foregroundStyle(selected ? .white : .primary)
+                                        .padding(.horizontal, 11)
+                                        .padding(.vertical, 5)
+                                        .background(selected ? Color.accentColor : Color(.secondarySystemBackground), in: Capsule())
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.bottom, 10)
+
+            Divider().opacity(0.35)
 
             ScrollView {
                 VStack(spacing: 0) {

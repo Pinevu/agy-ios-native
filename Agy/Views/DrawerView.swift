@@ -5,6 +5,9 @@ import Combine
 enum FullScreenSubpage: Equatable {
     case jobs
     case skills
+    case mcp
+    case env
+    case memory
     case usage
 }
 
@@ -133,8 +136,25 @@ struct DrawerView: View {
                                         chevron: true) {
                                     openSubpage(.jobs)
                                 }
-                                menuRow("技能商店", icon: "square.grid.2x2", chevron: true) {
+                                menuRow("技能商店", icon: "square.grid.2x2",
+                                        badge: state.skills.isEmpty ? nil : "\(state.skills.count)",
+                                        chevron: true) {
                                     openSubpage(.skills)
+                                }
+                                menuRow("MCP 服务器", icon: "point.3.connected.trianglepath.dotted",
+                                        badge: state.mcpServers.isEmpty ? nil : "\(state.enabledMCPCount)/\(state.mcpServers.count)",
+                                        chevron: true) {
+                                    openSubpage(.mcp)
+                                }
+                                menuRow("环境变量", icon: "key.radiowaves.forward",
+                                        badge: state.envVars.isEmpty ? nil : "\(state.enabledEnvCount)",
+                                        chevron: true) {
+                                    openSubpage(.env)
+                                }
+                                menuRow("记忆与设定", icon: "brain.head.profile",
+                                        badge: (!state.globalMemory.isEmpty || !state.memoryFiles.isEmpty || !state.agentSoul.rules.isEmpty) ? "生效" : nil,
+                                        chevron: true) {
+                                    openSubpage(.memory)
                                 }
                                 menuRow("用量", icon: "gauge.with.needle", chevron: true) {
                                     openSubpage(.usage)
@@ -219,6 +239,12 @@ struct DrawerView: View {
                         }
                     case .skills:
                         SkillsSheet(onClose: closeSubpage)
+                    case .mcp:
+                        MCPSheet(onClose: closeSubpage)
+                    case .env:
+                        EnvVarsSheet(onClose: closeSubpage)
+                    case .memory:
+                        AgentMemorySheet(onClose: closeSubpage)
                     case .usage:
                         QuotaSheet(onClose: closeSubpage)
                     }

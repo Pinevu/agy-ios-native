@@ -464,6 +464,160 @@ struct ModelInfo: Decodable, Hashable, Identifiable {
     let name: String
 }
 
+// MARK: - 环境变量（对齐 OpenMinis EnvironmentVariables）
+
+struct EnvVarItem: Codable, Identifiable, Hashable {
+    let id: String
+    var key: String
+    var value: String
+    var note: String?
+    var enabled: Bool
+    var updated: Double?
+}
+
+struct EnvVarsResponse: Decodable {
+    let ok: Bool?
+    let privacyMode: Bool?
+    let vars: [EnvVarItem]?
+    let item: EnvVarItem?
+    let imported: Int?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case ok, vars, item, imported, error
+        case privacyMode = "privacy_mode"
+    }
+}
+
+// MARK: - MCP 服务器（对齐 OpenMinis MCPIntegrations + JSON-RPC 工具探测）
+
+struct MCPServerItem: Codable, Identifiable, Hashable {
+    var id: String
+    var name: String?
+    var transport: String
+    var command: String?
+    var args: [String]?
+    var env: [String: String]?
+    var url: String?
+    var headers: [String: String]?
+    var note: String?
+    var enabled: Bool
+    var toolsCount: Int?
+    var lastOk: Bool?
+    var updated: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, transport, command, args, env, url, headers, note, enabled, updated
+        case toolsCount = "tools_count"
+        case lastOk = "last_ok"
+    }
+
+    var isHTTP: Bool {
+        transport.lowercased() == "http"
+    }
+
+    var displayTitle: String {
+        if let n = name, !n.isEmpty { return n }
+        return id
+    }
+
+    var summaryLine: String {
+        if isHTTP {
+            return url ?? ""
+        }
+        let cmd = command ?? ""
+        let joined = (args ?? []).joined(separator: " ")
+        return joined.isEmpty ? cmd : "\(cmd) \(joined)"
+    }
+}
+
+struct MCPToolInfo: Decodable, Identifiable, Hashable {
+    let name: String
+    let description: String?
+    var id: String { name }
+}
+
+struct MCPListResponse: Decodable {
+    let ok: Bool?
+    let servers: [MCPServerItem]?
+    let presets: [MCPServerItem]?
+    let server: MCPServerItem?
+    let imported: [String]?
+    let error: String?
+}
+
+struct MCPProbeResponse: Decodable {
+    let ok: Bool?
+    let id: String?
+    let latencyMs: Int?
+    let toolsCount: Int?
+    let tools: [MCPToolInfo]?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case ok, id, tools, error
+        case latencyMs = "latency_ms"
+        case toolsCount = "tools_count"
+    }
+}
+
+// MARK: - Agent 人格规则（Soul）与持久记忆（GEMINI.md）
+
+struct AgentSoulConfig: Codable, Equatable {
+    var name: String
+    var role: String
+    var style: String
+    var language: String
+    var rules: String
+
+    static let empty = AgentSoulConfig(name: "", role: "", style: "", language: "简体中文", rules: "")
+
+    init(name: String = "", role: String = "", style: String = "", language: String = "简体中文", rules: String = "") {
+        self.name = name
+        self.role = role
+        self.style = style
+        self.language = language
+        self.rules = rules
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = (try? c.decode(String.self, forKey: .name)) ?? ""
+        role = (try? c.decode(String.self, forKey: .role)) ?? ""
+        style = (try? c.decode(String.self, forKey: .style)) ?? ""
+        language = (try? c.decode(String.self, forKey: .language)) ?? "简体中文"
+        rules = (try? c.decode(String.self, forKey: .rules)) ?? ""
+    }
+}
+
+struct MemoryNoteFile: Decodable, Identifiable, Hashable {
+    let name: String
+    let size: Int?
+    let mtime: Double?
+    let content: String?
+    var id: String { name }
+}
+
+struct AgentMemoryResponse: Decodable {
+    let ok: Bool?
+    let enabled: Bool?
+    let injectNotes: Bool?
+    let soul: AgentSoulConfig?
+    let globalMemory: String?
+    let files: [MemoryNoteFile]?
+    let charCount: Int?
+    let charLimit: Int?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case ok, enabled, soul, files, error
+        case injectNotes = "inject_notes"
+        case globalMemory = "global_memory"
+        case charCount = "char_count"
+        case charLimit = "char_limit"
+    }
+}
+
 // MARK: - 聊天气泡模型
 
 enum ChatItemKind {
