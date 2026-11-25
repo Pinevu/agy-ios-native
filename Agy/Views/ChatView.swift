@@ -113,7 +113,10 @@ struct ChatView: View {
     /// 仅折叠「已完成历史轮次」（最后一条用户消息之前）的连续 {.note, .tool} 链。
     /// 当前轮次（尤其任务执行中）绝不中途合并或收缩高度，彻底杜绝 LazyVStack 高度塌陷导致的白屏。
     private var displayUnits: [ChatDisplayUnit] {
-        let items = state.items
+        let items = state.items.filter {
+            if case .usage = $0.kind { return false }
+            return true
+        }
         let foldBoundary = items.lastIndex(where: {
             if case .user = $0.kind { return true }
             return false
@@ -198,39 +201,26 @@ struct ChatView: View {
             }
 
             if let page = chatSubpage {
-                SideSlideFullScreenContainer(onClose: {
-                    withAnimation(.easeIn(duration: 0.22)) { chatSubpage = nil }
-                }) {
+                SideSlideFullScreenContainer(onDismissed: closeChatSubpageImmediate) { closeSlide in
                     switch page {
                     case .jobs:
-                        JobsSheet(onClose: {
-                            withAnimation(.easeIn(duration: 0.22)) { chatSubpage = nil }
-                        }) { sid in
-                            withAnimation(.easeIn(duration: 0.2)) { chatSubpage = nil }
+                        JobsSheet(onClose: closeSlide) { sid in
+                            closeChatSubpageImmediate()
                             Task { await state.openSessionById(sid) }
                         }
                     case .skills:
-                        SkillsSheet(onClose: {
-                            withAnimation(.easeIn(duration: 0.22)) { chatSubpage = nil }
-                        })
+                        SkillsSheet(onClose: closeSlide)
                     case .mcp:
-                        MCPSheet(onClose: {
-                            withAnimation(.easeIn(duration: 0.22)) { chatSubpage = nil }
-                        })
+                        MCPSheet(onClose: closeSlide)
                     case .env:
-                        EnvVarsSheet(onClose: {
-                            withAnimation(.easeIn(duration: 0.22)) { chatSubpage = nil }
-                        })
+                        EnvVarsSheet(onClose: closeSlide)
                     case .memory:
-                        AgentMemorySheet(onClose: {
-                            withAnimation(.easeIn(duration: 0.22)) { chatSubpage = nil }
-                        })
+                        AgentMemorySheet(onClose: closeSlide)
                     case .usage:
-                        QuotaSheet(onClose: {
-                            withAnimation(.easeIn(duration: 0.22)) { chatSubpage = nil }
-                        })
+                        QuotaSheet(onClose: closeSlide)
                     }
                 }
+                .id(page)
                 .zIndex(5)
             }
 
@@ -252,7 +242,6 @@ struct ChatView: View {
         }
         .animation(.easeInOut(duration: 0.2), value: state.toast)
         .animation(.easeOut(duration: 0.24), value: showDrawer)
-        .animation(.easeOut(duration: 0.25), value: chatSubpage)
         .onAppear {
             input = state.savedDraft(for: state.currentSession?.id)
             consumePendingDeepLink()
@@ -370,6 +359,23 @@ struct ChatView: View {
         }
     }
 
+    private func openChatSubpage(_ page: FullScreenSubpage) {
+        dismissKeyboard()
+        var tx = Transaction()
+        tx.disablesAnimations = true
+        withTransaction(tx) {
+            chatSubpage = page
+        }
+    }
+
+    private func closeChatSubpageImmediate() {
+        var tx = Transaction()
+        tx.disablesAnimations = true
+        withTransaction(tx) {
+            chatSubpage = nil
+        }
+    }
+
     // MARK: - DeepLink 分发
 
     private func consumePendingDeepLink() {
@@ -402,17 +408,17 @@ struct ChatView: View {
         case .voice:
             startVoiceInput()
         case .jobs:
-            withAnimation(.easeOut(duration: 0.25)) { chatSubpage = .jobs }
+            openChatSubpage(.jobs)
         case .skills:
-            withAnimation(.easeOut(duration: 0.25)) { chatSubpage = .skills }
+            openChatSubpage(.skills)
         case .mcp:
-            withAnimation(.easeOut(duration: 0.25)) { chatSubpage = .mcp }
+            openChatSubpage(.mcp)
         case .env:
-            withAnimation(.easeOut(duration: 0.25)) { chatSubpage = .env }
+            openChatSubpage(.env)
         case .memory:
-            withAnimation(.easeOut(duration: 0.25)) { chatSubpage = .memory }
+            openChatSubpage(.memory)
         case .quota:
-            withAnimation(.easeOut(duration: 0.25)) { chatSubpage = .usage }
+            openChatSubpage(.usage)
         }
     }
 
@@ -912,16 +918,13 @@ struct ChatView: View {
 
             HStack(spacing: 8) {
                 emptyQuickPill("MCP (\(state.enabledMCPCount))", icon: "point.3.connected.trianglepath.dotted") {
-                    dismissKeyboard()
-                    withAnimation(.easeOut(duration: 0.25)) { chatSubpage = .mcp }
+                    openChatSubpage(.mcp)
                 }
                 emptyQuickPill("环境变量 (\(state.enabledEnvCount))", icon: "key.radiowaves.forward") {
-                    dismissKeyboard()
-                    withAnimation(.easeOut(duration: 0.25)) { chatSubpage = .env }
+                    openChatSubpage(.env)
                 }
                 emptyQuickPill("记忆设定", icon: "brain.head.profile") {
-                    dismissKeyboard()
-                    withAnimation(.easeOut(duration: 0.25)) { chatSubpage = .memory }
+                    openChatSubpage(.memory)
                 }
                 emptyQuickPill("/ 指令", icon: "terminal") {
                     input = "/"
@@ -1038,8 +1041,7 @@ struct ChatView: View {
                 tagColor: .blue
             ) {
                 input = ""
-                dismissKeyboard()
-                withAnimation(.easeOut(duration: 0.25)) { chatSubpage = .mcp }
+                openChatSubpage(.mcp)
             },
             SlashMenuItem(
                 id: "cmd-env",
@@ -1051,8 +1053,7 @@ struct ChatView: View {
                 tagColor: .orange
             ) {
                 input = ""
-                dismissKeyboard()
-                withAnimation(.easeOut(duration: 0.25)) { chatSubpage = .env }
+                openChatSubpage(.env)
             },
             SlashMenuItem(
                 id: "cmd-memory",
@@ -1064,8 +1065,7 @@ struct ChatView: View {
                 tagColor: .purple
             ) {
                 input = ""
-                dismissKeyboard()
-                withAnimation(.easeOut(duration: 0.25)) { chatSubpage = .memory }
+                openChatSubpage(.memory)
             },
             SlashMenuItem(
                 id: "cmd-skills",
@@ -1077,8 +1077,7 @@ struct ChatView: View {
                 tagColor: .teal
             ) {
                 input = ""
-                dismissKeyboard()
-                withAnimation(.easeOut(duration: 0.25)) { chatSubpage = .skills }
+                openChatSubpage(.skills)
             },
             SlashMenuItem(
                 id: "cmd-new",

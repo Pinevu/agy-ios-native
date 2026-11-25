@@ -38,8 +38,8 @@ extension AppState {
         let epoch = forEpoch ?? instanceEpoch
         guard let resp = try? await api.envVars() else { return }
         guard epoch == instanceEpoch else { return }
-        if let list = resp.vars { envVars = list }
-        if let pm = resp.privacyMode { envPrivacyMode = pm }
+        if let list = resp.vars, envVars != list { envVars = list }
+        if let pm = resp.privacyMode, envPrivacyMode != pm { envPrivacyMode = pm }
     }
 
     func saveEnvVar(id: String? = nil, key: String, value: String, note: String, enabled: Bool) async -> String? {
@@ -123,8 +123,8 @@ extension AppState {
         let epoch = forEpoch ?? instanceEpoch
         guard let resp = try? await api.mcpList() else { return }
         guard epoch == instanceEpoch else { return }
-        if let list = resp.servers { mcpServers = list }
-        if let presets = resp.presets { mcpPresets = presets }
+        if let list = resp.servers, mcpServers != list { mcpServers = list }
+        if let presets = resp.presets, mcpPresets != presets { mcpPresets = presets }
     }
 
     func saveMCPServer(_ payload: [String: Any], isNew: Bool) async -> String? {
@@ -213,13 +213,13 @@ extension AppState {
     }
 
     private func applyAgentMemoryResponse(_ resp: AgentMemoryResponse) {
-        if let en = resp.enabled { agentMemoryEnabled = en }
-        if let inj = resp.injectNotes { agentInjectNotes = inj }
-        if let s = resp.soul { agentSoul = s }
-        if let gm = resp.globalMemory { globalMemory = gm }
-        if let fs = resp.files { memoryFiles = fs }
-        if let cc = resp.charCount { memoryCharCount = cc }
-        if let cl = resp.charLimit { memoryCharLimit = cl }
+        if let en = resp.enabled, agentMemoryEnabled != en { agentMemoryEnabled = en }
+        if let inj = resp.injectNotes, agentInjectNotes != inj { agentInjectNotes = inj }
+        if let s = resp.soul, agentSoul != s { agentSoul = s }
+        if let gm = resp.globalMemory, globalMemory != gm { globalMemory = gm }
+        if let fs = resp.files, memoryFiles != fs { memoryFiles = fs }
+        if let cc = resp.charCount, memoryCharCount != cc { memoryCharCount = cc }
+        if let cl = resp.charLimit, memoryCharLimit != cl { memoryCharLimit = cl }
     }
 
     func saveAgentProfile(

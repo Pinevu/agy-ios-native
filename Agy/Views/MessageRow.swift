@@ -55,11 +55,8 @@ struct MessageRow: View {
         case .tool(let name, let input, let output, let seconds, let running):
             ToolCardView(name: name, input: input, output: output, seconds: seconds, running: running)
 
-        case .usage(let text):
-            Text(text)
-                .font(.system(size: 10.5, design: .monospaced))
-                .foregroundStyle(.tertiary)
-                .frame(maxWidth: .infinity, alignment: .leading)
+        case .usage:
+            EmptyView()
 
         case .error(let text):
             HStack(alignment: .top, spacing: 6) {

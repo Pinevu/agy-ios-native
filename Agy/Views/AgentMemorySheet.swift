@@ -105,11 +105,16 @@ struct AgentMemorySheet: View {
                     }
                 }
             }
-            .task(id: state.currentInstanceId) {
-                loading = true
-                await state.refreshAgentMemory()
+            .onAppear {
                 syncFromState()
-                loading = false
+            }
+            .task(id: state.currentInstanceId) {
+                try? await Task.sleep(nanoseconds: 380_000_000)
+                guard !Task.isCancelled else { return }
+                await state.refreshAgentMemory()
+                if !dirty {
+                    syncFromState()
+                }
             }
             .sheet(isPresented: $showNewNote) {
                 MemoryNoteEditorSheet(existing: nil)

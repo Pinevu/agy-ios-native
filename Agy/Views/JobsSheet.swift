@@ -64,7 +64,13 @@ struct JobsSheet: View {
                     }
                 }
             }
-            .task { await state.refreshJobs() }
+            .task {
+                if !state.jobs.isEmpty {
+                    try? await Task.sleep(nanoseconds: 380_000_000)
+                    guard !Task.isCancelled else { return }
+                }
+                await state.refreshJobs()
+            }
             .sheet(isPresented: $showCreate) {
                 JobEditorSheet(existing: nil)
             }

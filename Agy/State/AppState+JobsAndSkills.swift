@@ -7,11 +7,12 @@ extension AppState {
 
     func refreshJobs() async {
         let epoch = instanceEpoch
-        isLoadingJobs = true
-        defer { if epoch == instanceEpoch { isLoadingJobs = false } }
+        let shouldShowLoading = jobs.isEmpty
+        if shouldShowLoading { isLoadingJobs = true }
+        defer { if shouldShowLoading && epoch == instanceEpoch { isLoadingJobs = false } }
         if let list = try? await api.jobs() {
             guard epoch == instanceEpoch else { return }
-            jobs = list
+            if jobs != list { jobs = list }
         }
     }
 
@@ -81,7 +82,7 @@ extension AppState {
         let epoch = instanceEpoch
         if let list = try? await api.skills() {
             guard epoch == instanceEpoch else { return }
-            skills = list
+            if skills != list { skills = list }
         }
     }
 
@@ -89,7 +90,7 @@ extension AppState {
         let epoch = instanceEpoch
         if let resp = try? await api.skillsCatalog(force: force), let list = resp.skills {
             guard epoch == instanceEpoch else { return }
-            skillsCatalog = list
+            if skillsCatalog != list { skillsCatalog = list }
         }
     }
 

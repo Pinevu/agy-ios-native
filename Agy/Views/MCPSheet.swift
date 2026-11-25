@@ -80,11 +80,17 @@ struct MCPSheet: View {
                 }
             }
             .task(id: state.currentInstanceId) {
-                loading = true
+                let hasCache = !state.mcpServers.isEmpty || !state.mcpPresets.isEmpty
+                if !hasCache {
+                    loading = true
+                } else {
+                    try? await Task.sleep(nanoseconds: 380_000_000)
+                    guard !Task.isCancelled else { return }
+                }
                 async let m: Void = state.refreshMCPServers()
                 async let e: Void = state.refreshEnvVars()
                 _ = await (m, e)
-                loading = false
+                if loading { loading = false }
             }
             .sheet(isPresented: $showCreateForm) {
                 MCPFormSheet(existing: nil)

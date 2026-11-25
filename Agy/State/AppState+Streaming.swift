@@ -869,7 +869,7 @@ extension AppState {
                 }
             }
         case "usage":
-            if let u = ev.usage { buf.append(ChatItem(kind: .usage(text: u.summary))) }
+            break
         case "error":
             buf.append(ChatItem(kind: .error(text: ev.error ?? ev.text ?? "未知错误")))
         case "end":
@@ -951,7 +951,7 @@ extension AppState {
             }
 
         case "usage":
-            if let u = ev.usage { items.append(ChatItem(kind: .usage(text: u.summary))) }
+            break
 
         case "error":
             items.append(ChatItem(kind: .error(text: ev.error ?? ev.text ?? "未知错误")))
@@ -1101,7 +1101,7 @@ extension AppState {
                 }
 
             case "usage":
-                if let u = ev.usage { out.append(ChatItem(kind: .usage(text: u.summary))) }
+                break
 
             case "error":
                 out.append(ChatItem(kind: .error(text: ev.error ?? ev.text ?? "错误")))

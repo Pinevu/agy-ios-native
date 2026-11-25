@@ -6,7 +6,7 @@ struct SkillsSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var tab = 0 // 0 = 已安装, 1 = 社区目录
-    @State private var loadingInstalled = true
+    @State private var loadingInstalled = false
     @State private var loadingCatalog = false
     @State private var catalogQuery = ""
     @State private var installingNames: Set<String> = []
@@ -109,7 +109,12 @@ struct SkillsSheet: View {
                 }
             }
             .task {
-                loadingInstalled = true
+                if state.skills.isEmpty {
+                    loadingInstalled = true
+                } else {
+                    try? await Task.sleep(nanoseconds: 380_000_000)
+                    guard !Task.isCancelled else { return }
+                }
                 await state.refreshSkills()
                 loadingInstalled = false
             }

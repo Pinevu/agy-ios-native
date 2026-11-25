@@ -11,44 +11,93 @@ enum FullScreenSubpage: Equatable {
     case usage
 }
 
-/// 原生全屏右侧滑入 + 左边缘跟手右滑返回容器
+/// 原生全屏右侧滑入 + 左边缘跟手右滑返回容器（纯 GPU 位移合成，消除 .transition 卸载卡顿与全屏阴影离屏渲染）
 struct SideSlideFullScreenContainer<Content: View>: View {
-    let onClose: () -> Void
-    @ViewBuilder let content: () -> Content
+    let onDismissed: () -> Void
+    @ViewBuilder let content: (@escaping () -> Void) -> Content
 
-    @State private var dragX: CGFloat = 0
+    @State private var offsetX: CGFloat = UIScreen.main.bounds.width
+    @State private var isClosing: Bool = false
+
+    private var screenWidth: CGFloat {
+        max(320, UIScreen.main.bounds.width)
+    }
+
+    private func triggerClose() {
+        guard !isClosing else { return }
+        isClosing = true
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        withAnimation(.spring(response: 0.25, dampingFraction: 0.98)) {
+            offsetX = screenWidth
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.24) {
+            var tx = Transaction()
+            tx.disablesAnimations = true
+            withTransaction(tx) {
+                onDismissed()
+            }
+        }
+    }
 
     var body: some View {
-        let dimOpacity = max(0.0, 0.18 * (1.0 - Double(dragX) / 360.0))
+        let progress = max(0.0, min(1.0, 1.0 - Double(offsetX / screenWidth)))
         ZStack(alignment: .leading) {
-            Color.black.opacity(dimOpacity)
+            Color.black.opacity(0.16 * progress)
                 .ignoresSafeArea()
                 .allowsHitTesting(false)
 
-            content()
+            content(triggerClose)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color(.systemBackground).ignoresSafeArea())
-                .offset(x: dragX)
-                .shadow(color: .black.opacity(dragX > 0 ? 0.16 : 0), radius: 14, x: -4)
+                .background(Color(.systemGroupedBackground).ignoresSafeArea())
+                .overlay(alignment: .leading) {
+                    Rectangle()
+                        .fill(Color(.separator).opacity(0.32))
+                        .frame(width: 0.5)
+                        .ignoresSafeArea()
+                }
+                .background(alignment: .leading) {
+                    LinearGradient(
+                        colors: [.clear, .black.opacity(0.09 * progress * min(1.0, Double(offsetX) / 12.0))],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                    .frame(width: 10)
+                    .offset(x: -10)
+                    .ignoresSafeArea()
+                    .allowsHitTesting(false)
+                }
+                .compositingGroup()
+                .offset(x: offsetX)
+                .allowsHitTesting(!isClosing)
                 .simultaneousGesture(
-                    DragGesture(minimumDistance: 18)
+                    DragGesture(minimumDistance: 16)
                         .onChanged { v in
-                            guard v.startLocation.x < 48,
+                            guard !isClosing,
+                                  v.startLocation.x < 48,
                                   v.translation.width > 0,
-                                  abs(v.translation.width) > abs(v.translation.height) * 1.2 else { return }
-                            dragX = v.translation.width
+                                  abs(v.translation.width) > abs(v.translation.height) * 1.15 else { return }
+                            offsetX = v.translation.width
                         }
                         .onEnded { v in
-                            guard dragX > 0 else { return }
-                            if v.translation.width > 88 || v.predictedEndTranslation.width > 180 {
-                                onClose()
+                            guard !isClosing, offsetX > 0 else { return }
+                            if v.translation.width > 86 || v.predictedEndTranslation.width > 175 {
+                                triggerClose()
                             } else {
-                                withAnimation(.easeOut(duration: 0.2)) { dragX = 0 }
+                                withAnimation(.spring(response: 0.26, dampingFraction: 0.96)) {
+                                    offsetX = 0
+                                }
                             }
                         }
                 )
         }
-        .transition(.move(edge: .trailing))
+        .onAppear {
+            offsetX = screenWidth
+            DispatchQueue.main.async {
+                withAnimation(.spring(response: 0.29, dampingFraction: 0.96)) {
+                    offsetX = 0
+                }
+            }
+        }
     }
 }
 
@@ -224,37 +273,35 @@ struct DrawerView: View {
         }
         .frame(maxHeight: .infinity)
         .background(Color(.systemBackground))
+        .allowsHitTesting(activeSubpage == nil)
         .overlay(alignment: .leading) {
             Rectangle().fill(Color(.separator).opacity(0.3)).frame(width: 0.5)
         }
 
             if let page = activeSubpage {
-                SideSlideFullScreenContainer(onClose: closeSubpage) {
+                SideSlideFullScreenContainer(onDismissed: closeSubpageImmediate) { closeSlide in
                     switch page {
                     case .jobs:
-                        JobsSheet(onClose: closeSubpage) { sid in
-                            closeSubpage()
+                        JobsSheet(onClose: closeSlide) { sid in
+                            closeSubpageImmediate()
                             Task { await state.openSessionById(sid) }
                             isPresented = false
                         }
                     case .skills:
-                        SkillsSheet(onClose: closeSubpage)
+                        SkillsSheet(onClose: closeSlide)
                     case .mcp:
-                        MCPSheet(onClose: closeSubpage)
+                        MCPSheet(onClose: closeSlide)
                     case .env:
-                        EnvVarsSheet(onClose: closeSubpage)
+                        EnvVarsSheet(onClose: closeSlide)
                     case .memory:
-                        AgentMemorySheet(onClose: closeSubpage)
+                        AgentMemorySheet(onClose: closeSlide)
                     case .usage:
-                        QuotaSheet(onClose: closeSubpage)
+                        QuotaSheet(onClose: closeSlide)
                     }
                 }
+                .id(page)
                 .zIndex(10)
             }
-        }
-        .animation(.easeOut(duration: 0.25), value: activeSubpage)
-        .onChange(of: activeSubpage) { p in
-            subpageOpen = (p != nil)
         }
         .onChange(of: state.currentInstanceId) { _ in
             selectedGroupId = nil
@@ -262,6 +309,7 @@ struct DrawerView: View {
             batchMode = false
             selectedIds.removeAll()
             activeSubpage = nil
+            subpageOpen = false
         }
         .onDisappear {
             subpageOpen = false
@@ -523,14 +571,20 @@ struct DrawerView: View {
 
     private func openSubpage(_ page: FullScreenSubpage) {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-        withAnimation(.easeOut(duration: 0.26)) {
+        var tx = Transaction()
+        tx.disablesAnimations = true
+        withTransaction(tx) {
+            subpageOpen = true
             activeSubpage = page
         }
     }
 
-    private func closeSubpage() {
-        withAnimation(.easeIn(duration: 0.22)) {
+    private func closeSubpageImmediate() {
+        var tx = Transaction()
+        tx.disablesAnimations = true
+        withTransaction(tx) {
             activeSubpage = nil
+            subpageOpen = false
         }
     }
 
@@ -1043,6 +1097,10 @@ struct QuotaSheet: View {
             .task(id: state.currentInstanceId) {
                 quota = nil
                 loadError = nil
+                if state.lastQuotaSnapshot != nil {
+                    try? await Task.sleep(nanoseconds: 360_000_000)
+                    guard !Task.isCancelled else { return }
+                }
                 await load(force: false)
             }
             .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { _ in

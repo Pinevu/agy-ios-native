@@ -197,9 +197,14 @@ struct EnvVarsSheet: View {
                 }
             }
             .task(id: state.currentInstanceId) {
-                loading = true
+                if state.envVars.isEmpty {
+                    loading = true
+                } else {
+                    try? await Task.sleep(nanoseconds: 380_000_000)
+                    guard !Task.isCancelled else { return }
+                }
                 await state.refreshEnvVars()
-                loading = false
+                if loading { loading = false }
             }
             .sheet(isPresented: $showCreateSheet) {
                 EnvVarFormSheet(existing: nil, initialKey: presetKey, initialNote: presetNote)
