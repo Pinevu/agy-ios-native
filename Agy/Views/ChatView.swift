@@ -38,6 +38,7 @@ private struct ChatUnitRow: View, Equatable {
     let unit: ChatDisplayUnit
     let isLive: Bool
     let speakingItemId: UUID?
+    let loadingTTSItemId: UUID?
     let menu: ChatItem?
     let onMenu: (ChatItem?) -> Void
     let actions: MessageActions
@@ -48,7 +49,9 @@ private struct ChatUnitRow: View, Equatable {
         case (.single(let x), .single(let y)):
             let aSpeak = a.speakingItemId == x.id
             let bSpeak = b.speakingItemId == y.id
-            return x.id == y.id && aSpeak == bSpeak && sameChatKind(x.kind, y.kind)
+            let aLoad = a.loadingTTSItemId == x.id
+            let bLoad = b.loadingTTSItemId == y.id
+            return x.id == y.id && aSpeak == bSpeak && aLoad == bLoad && sameChatKind(x.kind, y.kind)
         case (.toolGroup(let id1, let xs, let l1), .toolGroup(let id2, let ys, let l2)):
             guard id1 == id2, l1 == l2, xs.count == ys.count else { return false }
             for i in xs.indices {
@@ -68,6 +71,7 @@ private struct ChatUnitRow: View, Equatable {
                 isLive: isLive,
                 actions: actions,
                 isSpeaking: speakingItemId == item.id,
+                isLoadingTTS: loadingTTSItemId == item.id,
                 assistantMenu: Binding(get: { menu }, set: { onMenu($0) })
             )
         case .toolGroup(_, let groupItems, let isLiveGroup):
@@ -216,6 +220,8 @@ struct ChatView: View {
                         EnvVarsSheet(onClose: closeSlide)
                     case .memory:
                         AgentMemorySheet(onClose: closeSlide)
+                    case .voice:
+                        VoiceSettingsSheet(onClose: closeSlide)
                     case .usage:
                         QuotaSheet(onClose: closeSlide)
                     }
@@ -407,6 +413,8 @@ struct ChatView: View {
             }
         case .voice:
             startVoiceInput()
+        case .voiceSettings:
+            openChatSubpage(.voice)
         case .jobs:
             openChatSubpage(.jobs)
         case .skills:
@@ -653,6 +661,7 @@ struct ChatView: View {
                         unit: unit,
                         isLive: state.isCurrentTaskRunning && lastId == unit.id,
                         speakingItemId: speech.speakingItemId,
+                        loadingTTSItemId: speech.loadingTTSItemId,
                         menu: assistantMenu,
                         onMenu: { assistantMenu = $0 },
                         actions: rowActions
@@ -1080,6 +1089,18 @@ struct ChatView: View {
                 openChatSubpage(.skills)
             },
             SlashMenuItem(
+                id: "cmd-voice",
+                trigger: "/voice",
+                title: "语音服务设置 (TTS / STT)",
+                subtitle: "配置自定义朗读模型与语音转录 API",
+                icon: "waveform",
+                tag: speech.activeVoiceSummaryBadge ?? "系统",
+                tagColor: .pink
+            ) {
+                input = ""
+                openChatSubpage(.voice)
+            },
+            SlashMenuItem(
                 id: "cmd-new",
                 trigger: "/new",
                 title: "发起新对话",
@@ -1290,8 +1311,8 @@ struct ChatView: View {
                 .background(Color.orange.opacity(0.08))
             }
 
-            // 录音实时波形条
-            if speech.isRecording {
+            // 录音实时波形条 / 云端转录进度条
+            if speech.isRecording || speech.isTranscribing {
                 voiceWaveformBar
             }
 
@@ -1373,25 +1394,37 @@ struct ChatView: View {
                     .accessibilityLabel("转移草稿到其它会话")
                 }
 
-                // 原生语音输入键
+                // 原生语音输入 / 自定义 STT 录音键
                 Button {
-                    if speech.isRecording {
+                    if speech.isTranscribing {
+                        speech.cancelRecording()
+                    } else if speech.isRecording {
                         _ = speech.stopRecording()
                     } else {
                         startVoiceInput()
                     }
                 } label: {
-                    Image(systemName: speech.isRecording ? "waveform.circle.fill" : "mic")
-                        .font(.system(size: speech.isRecording ? 20 : 17, weight: .medium))
-                        .foregroundStyle(speech.isRecording ? Color.red : Color.secondary)
-                        .frame(width: 30, height: 34)
+                    if speech.isTranscribing {
+                        ProgressView()
+                            .scaleEffect(0.75)
+                            .frame(width: 30, height: 34)
+                    } else {
+                        Image(systemName: speech.isRecording ? "waveform.circle.fill" : "mic")
+                            .font(.system(size: speech.isRecording ? 20 : 17, weight: .medium))
+                            .foregroundStyle(speech.isRecording ? Color.red : Color.secondary)
+                            .frame(width: 30, height: 34)
+                    }
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("语音输入")
 
                 // 发送 / 排队 / 停止键
                 Button {
-                    if speech.isRecording { _ = speech.stopRecording() }
+                    if speech.isRecording {
+                        let isCustom = speech.isCustomSTTEnabled
+                        _ = speech.stopRecording()
+                        if isCustom { return }
+                    }
                     let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
                     let empty = trimmed.isEmpty && state.attachments.isEmpty
                     if empty && !state.isCurrentTaskRunning {
@@ -1454,48 +1487,70 @@ struct ChatView: View {
 
     private var voiceWaveformBar: some View {
         HStack(spacing: 10) {
-            Button {
-                speech.toggleLocale()
-                startVoiceInput()
-            } label: {
-                Text(speech.shortLocaleLabel)
-                    .font(.system(size: 11.5, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Color(.tertiarySystemFill), in: Capsule())
-            }
-            .buttonStyle(.plain)
-
-            HStack(alignment: .center, spacing: 2.5) {
-                ForEach(Array(speech.levels.enumerated()), id: \.offset) { _, lvl in
-                    Capsule()
-                        .fill(Color.red.opacity(0.85))
-                        .frame(width: 2.5, height: max(4, lvl * 22))
+            if speech.isTranscribing {
+                ProgressView().scaleEffect(0.72)
+                Text("正在通过 \(speech.activeSTTLabel) 转录语音…")
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                Button("取消") {
+                    speech.cancelRecording()
                 }
-            }
-            .frame(height: 24)
-            .frame(maxWidth: .infinity)
-            .animation(.easeOut(duration: 0.08), value: speech.levels)
+                .font(.system(size: 12.5))
+                .foregroundStyle(.secondary)
+                .buttonStyle(.plain)
+            } else {
+                Button {
+                    if speech.isCustomSTTEnabled {
+                        speech.cancelRecording()
+                        input = draftBeforeVoice
+                        openChatSubpage(.voice)
+                    } else {
+                        speech.toggleLocale()
+                        startVoiceInput()
+                    }
+                } label: {
+                    Text(speech.activeSTTLabel)
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color(.tertiarySystemFill), in: Capsule())
+                }
+                .buttonStyle(.plain)
 
-            Button("取消") {
-                _ = speech.stopRecording()
-                input = draftBeforeVoice
-            }
-            .font(.system(size: 12.5))
-            .foregroundStyle(.secondary)
-            .buttonStyle(.plain)
+                HStack(alignment: .center, spacing: 2.5) {
+                    ForEach(Array(speech.levels.enumerated()), id: \.offset) { _, lvl in
+                        Capsule()
+                            .fill(Color.red.opacity(0.85))
+                            .frame(width: 2.5, height: max(4, lvl * 22))
+                    }
+                }
+                .frame(height: 24)
+                .frame(maxWidth: .infinity)
+                .animation(.easeOut(duration: 0.08), value: speech.levels)
 
-            Button("完成") {
-                _ = speech.stopRecording()
+                Button("取消") {
+                    speech.cancelRecording()
+                    input = draftBeforeVoice
+                }
+                .font(.system(size: 12.5))
+                .foregroundStyle(.secondary)
+                .buttonStyle(.plain)
+
+                Button(speech.isCustomSTTEnabled ? "转录" : "完成") {
+                    _ = speech.stopRecording()
+                }
+                .font(.system(size: 12.5, weight: .semibold))
+                .foregroundStyle(Color.accentColor)
+                .buttonStyle(.plain)
             }
-            .font(.system(size: 12.5, weight: .semibold))
-            .foregroundStyle(Color.accentColor)
-            .buttonStyle(.plain)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
-        .background(Color.red.opacity(0.06))
+        .background(speech.isTranscribing ? Color.accentColor.opacity(0.08) : Color.red.opacity(0.06))
     }
 
     private var isQueueMode: Bool {
@@ -1654,7 +1709,7 @@ struct ChatView: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text("选择运行模型")
                         .font(.system(size: 16, weight: .semibold))
-                    Text(state.currentInstance.name)
+                    Text("\(state.currentInstance.name) · \(state.currentSession == nil ? "新对话默认模型" : "本会话独立记忆")")
                         .font(.system(size: 11.5))
                         .foregroundStyle(.secondary)
                 }

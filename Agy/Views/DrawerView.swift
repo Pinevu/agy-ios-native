@@ -8,6 +8,7 @@ enum FullScreenSubpage: Equatable {
     case mcp
     case env
     case memory
+    case voice
     case usage
 }
 
@@ -105,6 +106,7 @@ struct SideSlideFullScreenContainer<Content: View>: View {
 struct DrawerView: View {
     @EnvironmentObject var state: AppState
     @EnvironmentObject var appLock: AppLockManager
+    @ObservedObject private var speech = SpeechManager.shared
     @Binding var isPresented: Bool
     @Binding var subpageOpen: Bool
 
@@ -205,6 +207,11 @@ struct DrawerView: View {
                                         chevron: true) {
                                     openSubpage(.memory)
                                 }
+                                menuRow("语音服务", icon: "waveform",
+                                        badge: speech.activeVoiceSummaryBadge,
+                                        chevron: true) {
+                                    openSubpage(.voice)
+                                }
                                 menuRow("用量", icon: "gauge.with.needle", chevron: true) {
                                     openSubpage(.usage)
                                 }
@@ -295,6 +302,8 @@ struct DrawerView: View {
                         EnvVarsSheet(onClose: closeSlide)
                     case .memory:
                         AgentMemorySheet(onClose: closeSlide)
+                    case .voice:
+                        VoiceSettingsSheet(onClose: closeSlide)
                     case .usage:
                         QuotaSheet(onClose: closeSlide)
                     }

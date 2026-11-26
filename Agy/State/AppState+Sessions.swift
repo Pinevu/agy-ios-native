@@ -173,6 +173,7 @@ extension AppState {
         await api.deleteSession(s.id)
         sessions.removeAll { $0.id == s.id }
         sessionDrafts.removeValue(forKey: s.id)
+        forgetSavedModels(for: [s.id, s.conversationId].compactMap { $0 })
         if currentSession?.id == s.id { newSession() }
         syncWidgetSnapshot()
     }
@@ -182,8 +183,10 @@ extension AppState {
         do {
             let count = try await api.batchDeleteSessions(ids: ids)
             let set = Set(ids)
+            let convIds = sessions.filter { set.contains($0.id) }.compactMap(\.conversationId)
             sessions.removeAll { set.contains($0.id) }
             for sid in ids { sessionDrafts.removeValue(forKey: sid) }
+            forgetSavedModels(for: ids + convIds)
             if let cur = currentSession?.id, set.contains(cur) { newSession() }
             showToast("已删除 \(count) 个对话")
             syncWidgetSnapshot()
@@ -215,6 +218,7 @@ extension AppState {
         draftSessionKey = "draft-\(UUID().uuidString)"
         lastActiveTaskId = session.latestTaskId
         currentSession = session
+        restoreModel(for: session)
         UserDefaults.standard.set(session.id, forKey: lastSessionStorageKey)
         UserDefaults.standard.set(session.id, forKey: "agy_last_session")
         conversationId = session.conversationId
@@ -318,6 +322,7 @@ extension AppState {
         conversationId = nil
         items = []
         assistantIndex = nil
+        restoreDefaultModelForNewSession()
     }
 
     // MARK: - 跨会话草稿持久化 & 转移（含 5 秒撤回）

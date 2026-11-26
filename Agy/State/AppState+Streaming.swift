@@ -319,6 +319,7 @@ extension AppState {
                 mode: agentMode == "auto" ? nil : agentMode
             )
             if let c = r.conversationId { conversationId = c }
+            rememberModel(model, forSessionId: currentSession?.id ?? r.conversationId ?? r.id, conversationId: r.conversationId ?? conversationId)
             lastActiveTaskId = r.id
             if let idx = items.firstIndex(where: { $0.id == bubbleId }) {
                 items[idx].taskId = r.id
@@ -610,6 +611,7 @@ extension AppState {
         let oldDraftKey = draftSessionKey
         currentSession = matched
         if let mc = matched.conversationId { conversationId = mc }
+        rememberModel(model, forSessionId: matched.id, conversationId: matched.conversationId ?? conversationId)
         UserDefaults.standard.set(matched.id, forKey: lastSessionStorageKey)
         UserDefaults.standard.set(matched.id, forKey: "agy_last_session")
         sessionItems[matched.id] = items

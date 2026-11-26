@@ -10,6 +10,7 @@ final class DeepLinkRouter: ObservableObject {
         case newChat(prompt: String?, autoSend: Bool)
         case session(id: String)
         case voice
+        case voiceSettings
         case jobs
         case skills
         case mcp
@@ -62,6 +63,8 @@ final class DeepLinkRouter: ObservableObject {
             enqueue(.newChat(prompt: prompt?.isEmpty == true ? nil : prompt, autoSend: auto))
         case "voice":
             enqueue(.voice)
+        case "voice-settings", "tts", "stt":
+            enqueue(.voiceSettings)
         case "jobs":
             enqueue(.jobs)
         case "skills":

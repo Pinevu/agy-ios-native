@@ -103,6 +103,8 @@ final class AppState: ObservableObject {
     // MARK: - 模型 & 外观 & 隐私设置
     @Published var model = UserDefaults.standard.string(forKey: "agy_model") ?? "gemini-3.8-flash-high"
     @Published var modelOptions: [ModelOption] = AppState.models
+    /// 按实例隔离的「会话 ID -> 所选模型 ID」记忆表（持久化到 UserDefaults）
+    var sessionModels: [String: String] = [:]
     @Published var toast: String?
     @Published var loadingSession: String?
 
@@ -405,6 +407,7 @@ final class AppState: ObservableObject {
         memoryCharCount = 0
         lastQuotaSnapshot = nil
         modelOptions = AppState.models
+        sessionModels = [:]
 
         endBackgroundGraceTask()
         LiveActivityManager.shared.endAllImmediately()
@@ -550,15 +553,81 @@ final class AppState: ObservableObject {
         return obj["name"] as? String
     }
 
-    // MARK: - 模型管理
+    // MARK: - 模型管理（支持按会话独立持久化记忆所选模型）
 
     private func modelKey(for url: String) -> String { "agy_model::" + url }
+    private func sessionModelsKey(for url: String) -> String { "agy_session_models::" + url }
     private func effortKey(for url: String) -> String { "agy_effort::" + url }
     private func modeKey(for url: String) -> String { "agy_mode::" + url }
 
+    func defaultModelForCurrentInstance() -> String {
+        UserDefaults.standard.string(forKey: modelKey(for: api.baseURLString)) ?? "gemini-3.8-flash-high"
+    }
+
+    private func persistSessionModels() {
+        UserDefaults.standard.set(sessionModels, forKey: sessionModelsKey(for: api.baseURLString))
+    }
+
+    func rememberModel(_ modelId: String, forSessionId sid: String?, conversationId cid: String? = nil) {
+        let clean = modelId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+        var changed = false
+        if let sid, !sid.isEmpty, !sid.hasPrefix("draft-"), sessionModels[sid] != clean {
+            sessionModels[sid] = clean
+            changed = true
+        }
+        if let cid, !cid.isEmpty, sessionModels[cid] != clean {
+            sessionModels[cid] = clean
+            changed = true
+        }
+        if changed {
+            persistSessionModels()
+        }
+    }
+
+    func forgetSavedModels(for sessionIds: [String]) {
+        guard !sessionIds.isEmpty else { return }
+        var changed = false
+        for sid in sessionIds {
+            if sessionModels.removeValue(forKey: sid) != nil { changed = true }
+        }
+        if changed { persistSessionModels() }
+    }
+
+    func restoreModel(for session: Session) {
+        let localSaved = sessionModels[session.id]
+            ?? session.conversationId.flatMap { sessionModels[$0] }
+        let target: String
+        if let localSaved, !localSaved.isEmpty {
+            target = localSaved
+        } else if let srvModel = session.model?.trimmingCharacters(in: .whitespacesAndNewlines), !srvModel.isEmpty {
+            target = srvModel
+            rememberModel(srvModel, forSessionId: session.id, conversationId: session.conversationId)
+        } else {
+            target = defaultModelForCurrentInstance()
+        }
+        if model != target {
+            model = target
+        }
+    }
+
+    func restoreDefaultModelForNewSession() {
+        let fallback = defaultModelForCurrentInstance()
+        if model != fallback {
+            model = fallback
+        }
+    }
+
     func setModel(_ id: String) {
         model = id
-        UserDefaults.standard.set(id, forKey: modelKey(for: api.baseURLString))
+        if let cur = currentSession {
+            rememberModel(id, forSessionId: cur.id, conversationId: cur.conversationId ?? conversationId)
+        } else {
+            UserDefaults.standard.set(id, forKey: modelKey(for: api.baseURLString))
+            if let cid = conversationId, !cid.isEmpty {
+                rememberModel(id, forSessionId: cid, conversationId: cid)
+            }
+        }
     }
 
     func setReasoningEffort(_ val: String) {
@@ -572,8 +641,8 @@ final class AppState: ObservableObject {
     }
 
     func loadModelForCurrentInstance() {
-        let saved = UserDefaults.standard.string(forKey: modelKey(for: api.baseURLString))
-        model = saved ?? "gemini-3.8-flash-high"
+        sessionModels = (UserDefaults.standard.dictionary(forKey: sessionModelsKey(for: api.baseURLString)) as? [String: String]) ?? [:]
+        model = defaultModelForCurrentInstance()
         reasoningEffort = UserDefaults.standard.string(forKey: effortKey(for: api.baseURLString)) ?? ""
         agentMode = UserDefaults.standard.string(forKey: modeKey(for: api.baseURLString)) ?? "auto"
     }
@@ -590,7 +659,8 @@ final class AppState: ObservableObject {
             ModelOption(id: m.id, name: Self.prettyName(m.name), short: Self.shortName(m.name))
         }
         modelOptions = opts
-        if !opts.contains(where: { $0.id == model }) {
+        // 若新实例的默认模型不在可用列表内，仅当处于新对话时回退到首个可用模型，不覆盖已有会话记忆的模型
+        if currentSession == nil && !opts.contains(where: { $0.id == model }) {
             setModel(opts[0].id)
         }
     }

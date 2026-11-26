@@ -17,6 +17,7 @@ struct MessageRow: View {
     var isLive: Bool = false
     var actions: MessageActions = .none
     var isSpeaking: Bool = false
+    var isLoadingTTS: Bool = false
     /// 点按弹出的消息菜单，挂在列表外层，避免每行一个 dialog
     @Binding var assistantMenu: ChatItem?
 
@@ -97,10 +98,19 @@ struct MessageRow: View {
                 Button {
                     onSpeak(item, text)
                 } label: {
-                    Label(isSpeaking ? "停止" : "朗读",
-                          systemImage: isSpeaking ? "stop.circle.fill" : "speaker.wave.2")
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(isSpeaking ? Color.accentColor : Color(.tertiaryLabel))
+                    if isLoadingTTS {
+                        HStack(spacing: 4) {
+                            ProgressView().scaleEffect(0.62).frame(width: 12, height: 12)
+                            Text("生成中")
+                                .font(.system(size: 11.5))
+                                .foregroundStyle(Color.accentColor)
+                        }
+                    } else {
+                        Label(isSpeaking ? "停止" : "朗读",
+                              systemImage: isSpeaking ? "stop.circle.fill" : "speaker.wave.2")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(isSpeaking ? Color.accentColor : Color(.tertiaryLabel))
+                    }
                 }
                 .buttonStyle(.borderless)
             }
