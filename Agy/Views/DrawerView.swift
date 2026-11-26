@@ -3,6 +3,7 @@ import UIKit
 import Combine
 
 enum FullScreenSubpage: Equatable {
+    case settings
     case jobs
     case skills
     case mcp
@@ -14,6 +15,7 @@ enum FullScreenSubpage: Equatable {
 
 /// 原生全屏右侧滑入 + 左边缘跟手右滑返回容器（纯 GPU 位移合成，消除 .transition 卸载卡顿与全屏阴影离屏渲染）
 struct SideSlideFullScreenContainer<Content: View>: View {
+    var swipeBackEnabled: Bool = true
     let onDismissed: () -> Void
     @ViewBuilder let content: (@escaping () -> Void) -> Content
 
@@ -73,7 +75,8 @@ struct SideSlideFullScreenContainer<Content: View>: View {
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 16)
                         .onChanged { v in
-                            guard !isClosing,
+                            guard swipeBackEnabled,
+                                  !isClosing,
                                   v.startLocation.x < 48,
                                   v.translation.width > 0,
                                   abs(v.translation.width) > abs(v.translation.height) * 1.15 else { return }
@@ -121,6 +124,7 @@ struct DrawerView: View {
     @State private var showBatchGroupPicker = false
 
     @State private var activeSubpage: FullScreenSubpage? = nil
+    @State private var settingsNested = false
     @State private var showInstances = false
     @State private var showNewGroup = false
     @State private var newGroupName = ""
@@ -181,39 +185,6 @@ struct DrawerView: View {
                                 menuRow("发起新对话", icon: "square.and.pencil") {
                                     state.newSession()
                                     isPresented = false
-                                }
-                                menuRow("定时任务", icon: "clock.badge.checkmark",
-                                        badge: state.jobs.isEmpty ? nil : "\(state.jobs.count)",
-                                        chevron: true) {
-                                    openSubpage(.jobs)
-                                }
-                                menuRow("技能商店", icon: "square.grid.2x2",
-                                        badge: state.skills.isEmpty ? nil : "\(state.skills.count)",
-                                        chevron: true) {
-                                    openSubpage(.skills)
-                                }
-                                menuRow("MCP 服务器", icon: "point.3.connected.trianglepath.dotted",
-                                        badge: state.mcpServers.isEmpty ? nil : "\(state.enabledMCPCount)/\(state.mcpServers.count)",
-                                        chevron: true) {
-                                    openSubpage(.mcp)
-                                }
-                                menuRow("环境变量", icon: "key.radiowaves.forward",
-                                        badge: state.envVars.isEmpty ? nil : "\(state.enabledEnvCount)",
-                                        chevron: true) {
-                                    openSubpage(.env)
-                                }
-                                menuRow("记忆与设定", icon: "brain.head.profile",
-                                        badge: (!state.globalMemory.isEmpty || !state.memoryFiles.isEmpty || !state.agentSoul.rules.isEmpty) ? "生效" : nil,
-                                        chevron: true) {
-                                    openSubpage(.memory)
-                                }
-                                menuRow("语音服务", icon: "waveform",
-                                        badge: speech.activeVoiceSummaryBadge,
-                                        chevron: true) {
-                                    openSubpage(.voice)
-                                }
-                                menuRow("用量", icon: "gauge.with.needle", chevron: true) {
-                                    openSubpage(.usage)
                                 }
                             }
 
@@ -286,8 +257,27 @@ struct DrawerView: View {
         }
 
             if let page = activeSubpage {
-                SideSlideFullScreenContainer(onDismissed: closeSubpageImmediate) { closeSlide in
+                SideSlideFullScreenContainer(
+                    swipeBackEnabled: !(page == .settings && settingsNested),
+                    onDismissed: closeSubpageImmediate
+                ) { closeSlide in
                     switch page {
+                    case .settings:
+                        SettingsSheet(
+                            onClose: closeSlide,
+                            onNestedChanged: { nested in
+                                settingsNested = nested
+                            },
+                            onOpenSession: { sid in
+                                closeSubpageImmediate()
+                                Task { await state.openSessionById(sid) }
+                                isPresented = false
+                            },
+                            onLogout: {
+                                closeSubpageImmediate()
+                                isPresented = false
+                            }
+                        )
                     case .jobs:
                         JobsSheet(onClose: closeSlide) { sid in
                             closeSubpageImmediate()
@@ -592,6 +582,7 @@ struct DrawerView: View {
         var tx = Transaction()
         tx.disablesAnimations = true
         withTransaction(tx) {
+            settingsNested = false
             activeSubpage = nil
             subpageOpen = false
         }
@@ -812,88 +803,60 @@ struct DrawerView: View {
         .background(Color(.systemBackground))
     }
 
-    // MARK: - 底部实例与设置菜单
+    // MARK: - 底部实例与设置入口
 
     private var footer: some View {
         VStack(spacing: 0) {
             Divider().opacity(0.35)
             HStack(spacing: 12) {
-                Image("AppLogo")
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: 38, height: 38)
-                    .clipShape(Circle())
-                    .overlay(Circle().stroke(Color.primary.opacity(0.08), lineWidth: 0.8))
+                Button {
+                    showInstances = true
+                } label: {
+                    HStack(spacing: 12) {
+                        Image("AppLogo")
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: 38, height: 38)
+                            .clipShape(Circle())
+                            .overlay(Circle().stroke(Color.primary.opacity(0.08), lineWidth: 0.8))
 
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(state.currentInstance.name)
-                        .font(.system(size: 16, weight: .medium))
-                        .lineLimit(1)
-                    Text(state.currentInstance.url.replacingOccurrences(of: "https://", with: ""))
-                        .font(.system(size: 12.5))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        VStack(alignment: .leading, spacing: 1) {
+                            HStack(spacing: 4) {
+                                Text(state.currentInstance.name)
+                                    .font(.system(size: 16, weight: .medium))
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(1)
+                                Image(systemName: "chevron.up.chevron.down")
+                                    .font(.system(size: 9.5, weight: .semibold))
+                                    .foregroundStyle(.tertiary)
+                            }
+                            Text(state.currentInstance.url.replacingOccurrences(of: "https://", with: ""))
+                                .font(.system(size: 12.5))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
 
                 Spacer(minLength: 0)
 
-                Menu {
-                    Button {
-                        showInstances = true
-                    } label: { Label("切换实例", systemImage: "server.rack") }
-
-                    Button {
-                        Task {
-                            await state.syncSessionMeta()
-                            await state.refreshSessions()
-                        }
-                    } label: { Label("刷新对话", systemImage: "arrow.clockwise") }
-
-                    Divider()
-
-                    Button {
-                        state.liveActivityEnabled.toggle()
-                        state.showToast(state.liveActivityEnabled ? "已开启灵动岛" : "已关闭灵动岛")
-                    } label: {
-                        Label(state.liveActivityEnabled ? "关闭灵动岛" : "开启灵动岛",
-                              systemImage: state.liveActivityEnabled ? "capsule.inset.filled" : "capsule")
-                    }
-
-                    Button {
-                        state.liveActivityPrivacyMode.toggle()
-                        state.showToast(state.liveActivityPrivacyMode ? "已开启锁屏隐私模式" : "已关闭锁屏隐私模式")
-                    } label: {
-                        Label(state.liveActivityPrivacyMode ? "关闭锁屏隐私模式" : "开启锁屏隐私模式",
-                              systemImage: state.liveActivityPrivacyMode ? "eye.slash.fill" : "eye")
-                    }
-
-                    Button {
-                        Task {
-                            let target = !appLock.isEnabled
-                            let ok = await appLock.setEnabled(target)
-                            if ok {
-                                state.showToast(target ? "已开启 \(appLock.biometryTitle) 应用锁" : "已关闭应用锁")
-                            } else if let e = appLock.errorText {
-                                state.showToast(e)
-                            }
-                        }
-                    } label: {
-                        Label(appLock.isEnabled ? "关闭 \(appLock.biometryTitle) 锁" : "开启 \(appLock.biometryTitle) 锁",
-                              systemImage: appLock.biometryIcon)
-                    }
-
-                    Divider()
-
-                    Button(role: .destructive) {
-                        state.logout()
-                        isPresented = false
-                    } label: { Label("退出登录", systemImage: "rectangle.portrait.and.arrow.right") }
+                Button {
+                    openSubpage(.settings)
                 } label: {
-                    Image(systemName: "gearshape")
-                        .font(.system(size: 20))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 34, height: 34)
+                    HStack(spacing: 5) {
+                        Image(systemName: "gearshape")
+                            .font(.system(size: 18, weight: .medium))
+                        Text("设置")
+                            .font(.system(size: 14, weight: .medium))
+                    }
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 12)
+                    .frame(height: 34)
+                    .background(Color(.secondarySystemBackground), in: Capsule())
                 }
+                .buttonStyle(.plain)
             }
             .padding(.horizontal, 18)
             .padding(.vertical, 10)
@@ -926,6 +889,7 @@ private extension Color {
 struct QuotaSheet: View {
     @EnvironmentObject var state: AppState
     @Environment(\.dismiss) private var dismiss
+    var embedded: Bool = false
     var onClose: (() -> Void)? = nil
     @State private var quota: QuotaResponse?
     @State private var loading = false
@@ -940,8 +904,18 @@ struct QuotaSheet: View {
         if let onClose { onClose() } else { dismiss() }
     }
 
+    @ViewBuilder
     var body: some View {
-        NavigationStack {
+        if embedded {
+            quotaBody
+        } else {
+            NavigationStack {
+                quotaBody
+            }
+        }
+    }
+
+    private var quotaBody: some View {
             ScrollView {
                 if let q = displayedQuota, hasQuotaContent(q) {
                     VStack(alignment: .leading, spacing: 16) {
@@ -1079,14 +1053,16 @@ struct QuotaSheet: View {
             .navigationTitle("用量")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button {
-                        closeSelf()
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "chevron.left")
-                                .font(.system(size: 15, weight: .semibold))
-                            Text("返回")
+                if !embedded {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Button {
+                            closeSelf()
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "chevron.left")
+                                    .font(.system(size: 15, weight: .semibold))
+                                Text("返回")
+                            }
                         }
                     }
                 }
@@ -1115,7 +1091,6 @@ struct QuotaSheet: View {
             .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { _ in
                 Task { await load(force: false) }
             }
-        }
     }
 
     private func hasQuotaContent(_ q: QuotaResponse) -> Bool {

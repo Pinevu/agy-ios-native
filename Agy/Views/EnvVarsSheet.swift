@@ -5,6 +5,7 @@ import UIKit
 struct EnvVarsSheet: View {
     @EnvironmentObject var state: AppState
     @Environment(\.dismiss) private var dismiss
+    var embedded: Bool = false
     var onClose: (() -> Void)? = nil
 
     @State private var query = ""
@@ -36,8 +37,18 @@ struct EnvVarsSheet: View {
         }
     }
 
+    @ViewBuilder
     var body: some View {
-        NavigationStack {
+        if embedded {
+            envBody
+        } else {
+            NavigationStack {
+                envBody
+            }
+        }
+    }
+
+    private var envBody: some View {
             List {
                 Section {
                     Toggle(isOn: Binding(
@@ -153,14 +164,16 @@ struct EnvVarsSheet: View {
             .navigationTitle("环境变量")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button {
-                        closeSelf()
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "chevron.left")
-                                .font(.system(size: 15, weight: .semibold))
-                            Text("返回")
+                if !embedded {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Button {
+                            closeSelf()
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "chevron.left")
+                                    .font(.system(size: 15, weight: .semibold))
+                                Text("返回")
+                            }
                         }
                     }
                 }
@@ -215,7 +228,6 @@ struct EnvVarsSheet: View {
             .sheet(isPresented: $showBatchImport) {
                 EnvBatchImportSheet()
             }
-        }
     }
 
     private var emptyView: some View {

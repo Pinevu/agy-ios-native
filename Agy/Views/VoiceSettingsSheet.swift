@@ -6,6 +6,7 @@ struct VoiceSettingsSheet: View {
     @EnvironmentObject var state: AppState
     @ObservedObject private var speech = SpeechManager.shared
     @Environment(\.dismiss) private var dismiss
+    var embedded: Bool = false
     var onClose: (() -> Void)? = nil
 
     @State private var tab = 0 // 0 = TTS 朗读, 1 = STT 语音转录
@@ -77,8 +78,18 @@ struct VoiceSettingsSheet: View {
         if let onClose { onClose() } else { dismiss() }
     }
 
+    @ViewBuilder
     var body: some View {
-        NavigationStack {
+        if embedded {
+            voiceBody
+        } else {
+            NavigationStack {
+                voiceBody
+            }
+        }
+    }
+
+    private var voiceBody: some View {
             VStack(spacing: 0) {
                 Picker("模块", selection: $tab) {
                     Text("朗读模型 (TTS)").tag(0)
@@ -100,14 +111,16 @@ struct VoiceSettingsSheet: View {
             .navigationTitle("语音服务")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button {
-                        closeSelf()
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "chevron.left")
-                                .font(.system(size: 15, weight: .semibold))
-                            Text("返回")
+                if !embedded {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Button {
+                            closeSelf()
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "chevron.left")
+                                    .font(.system(size: 15, weight: .semibold))
+                                Text("返回")
+                            }
                         }
                     }
                 }
@@ -129,7 +142,6 @@ struct VoiceSettingsSheet: View {
                     testingSTTRecording = false
                 }
             }
-        }
     }
 
     private func loadFromManager() {

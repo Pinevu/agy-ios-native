@@ -7,6 +7,7 @@ struct JobsSheet: View {
 
     @State private var editingJob: ScheduledJob?
     @State private var showCreate = false
+    var embedded: Bool = false
     var onClose: (() -> Void)? = nil
     var onOpenSession: ((String) -> Void)?
 
@@ -14,8 +15,18 @@ struct JobsSheet: View {
         if let onClose { onClose() } else { dismiss() }
     }
 
+    @ViewBuilder
     var body: some View {
-        NavigationStack {
+        if embedded {
+            jobsBody
+        } else {
+            NavigationStack {
+                jobsBody
+            }
+        }
+    }
+
+    private var jobsBody: some View {
             Group {
                 if state.isLoadingJobs && state.jobs.isEmpty {
                     ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -44,14 +55,16 @@ struct JobsSheet: View {
             .navigationTitle("定时任务")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button {
-                        closeSelf()
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "chevron.left")
-                                .font(.system(size: 15, weight: .semibold))
-                            Text("返回")
+                if !embedded {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Button {
+                            closeSelf()
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "chevron.left")
+                                    .font(.system(size: 15, weight: .semibold))
+                                Text("返回")
+                            }
                         }
                     }
                 }
@@ -77,7 +90,6 @@ struct JobsSheet: View {
             .sheet(item: $editingJob) { job in
                 JobEditorSheet(existing: job)
             }
-        }
     }
 
     private var emptyView: some View {

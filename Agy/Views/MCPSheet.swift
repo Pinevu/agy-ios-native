@@ -5,6 +5,7 @@ import UIKit
 struct MCPSheet: View {
     @EnvironmentObject var state: AppState
     @Environment(\.dismiss) private var dismiss
+    var embedded: Bool = false
     var onClose: (() -> Void)? = nil
 
     @State private var tab = 0 // 0 = 已配置, 1 = 精选预设
@@ -19,8 +20,18 @@ struct MCPSheet: View {
         if let onClose { onClose() } else { dismiss() }
     }
 
+    @ViewBuilder
     var body: some View {
-        NavigationStack {
+        if embedded {
+            mcpBody
+        } else {
+            NavigationStack {
+                mcpBody
+            }
+        }
+    }
+
+    private var mcpBody: some View {
             VStack(spacing: 0) {
                 Picker("视图", selection: $tab) {
                     Text("已配置 (\(state.mcpServers.count))").tag(0)
@@ -42,14 +53,16 @@ struct MCPSheet: View {
             .navigationTitle("MCP 服务器")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button {
-                        closeSelf()
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "chevron.left")
-                                .font(.system(size: 15, weight: .semibold))
-                            Text("返回")
+                if !embedded {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Button {
+                            closeSelf()
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "chevron.left")
+                                    .font(.system(size: 15, weight: .semibold))
+                                Text("返回")
+                            }
                         }
                     }
                 }
@@ -104,7 +117,6 @@ struct MCPSheet: View {
             .sheet(item: $probingServer) { srv in
                 MCPProbeSheet(server: srv)
             }
-        }
     }
 
     // MARK: - 已配置列表

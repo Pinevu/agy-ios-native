@@ -5,6 +5,7 @@ import UIKit
 struct AgentMemorySheet: View {
     @EnvironmentObject var state: AppState
     @Environment(\.dismiss) private var dismiss
+    var embedded: Bool = false
     var onClose: (() -> Void)? = nil
 
     @State private var tab = 0 // 0 = 核心记忆, 1 = 人格规则, 2 = 专题笔记
@@ -45,8 +46,18 @@ struct AgentMemorySheet: View {
         return soulLen + memoryText.count + notesLen
     }
 
+    @ViewBuilder
     var body: some View {
-        NavigationStack {
+        if embedded {
+            memoryBody
+        } else {
+            NavigationStack {
+                memoryBody
+            }
+        }
+    }
+
+    private var memoryBody: some View {
             VStack(spacing: 0) {
                 Picker("模块", selection: $tab) {
                     Text("核心记忆").tag(0)
@@ -71,14 +82,16 @@ struct AgentMemorySheet: View {
             .navigationTitle("记忆与设定")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button {
-                        closeSelf()
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "chevron.left")
-                                .font(.system(size: 15, weight: .semibold))
-                            Text("返回")
+                if !embedded {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Button {
+                            closeSelf()
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "chevron.left")
+                                    .font(.system(size: 15, weight: .semibold))
+                                Text("返回")
+                            }
                         }
                     }
                 }
@@ -122,7 +135,6 @@ struct AgentMemorySheet: View {
             .sheet(item: $editingFile) { file in
                 MemoryNoteEditorSheet(existing: file)
             }
-        }
     }
 
     private func syncFromState() {

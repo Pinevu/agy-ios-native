@@ -207,6 +207,17 @@ struct ChatView: View {
             if let page = chatSubpage {
                 SideSlideFullScreenContainer(onDismissed: closeChatSubpageImmediate) { closeSlide in
                     switch page {
+                    case .settings:
+                        SettingsSheet(
+                            onClose: closeSlide,
+                            onOpenSession: { sid in
+                                closeChatSubpageImmediate()
+                                Task { await state.openSessionById(sid) }
+                            },
+                            onLogout: {
+                                closeChatSubpageImmediate()
+                            }
+                        )
                     case .jobs:
                         JobsSheet(onClose: closeSlide) { sid in
                             closeChatSubpageImmediate()

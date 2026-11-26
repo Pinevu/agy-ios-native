@@ -13,6 +13,7 @@ struct SkillsSheet: View {
     @State private var banner: (text: String, isError: Bool)? = nil
     @State private var selectedSkill: Skill?
     @State private var showInstaller = false
+    var embedded: Bool = false
     var onClose: (() -> Void)? = nil
 
     private func closeSelf() {
@@ -41,8 +42,18 @@ struct SkillsSheet: View {
         }
     }
 
+    @ViewBuilder
     var body: some View {
-        NavigationStack {
+        if embedded {
+            skillsBody
+        } else {
+            NavigationStack {
+                skillsBody
+            }
+        }
+    }
+
+    private var skillsBody: some View {
             VStack(spacing: 0) {
                 Picker("视图", selection: $tab) {
                     Text("已安装 (\(state.skills.count))").tag(0)
@@ -88,14 +99,16 @@ struct SkillsSheet: View {
             .navigationTitle("技能商店")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button {
-                        closeSelf()
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "chevron.left")
-                                .font(.system(size: 15, weight: .semibold))
-                            Text("返回")
+                if !embedded {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Button {
+                            closeSelf()
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "chevron.left")
+                                    .font(.system(size: 15, weight: .semibold))
+                                Text("返回")
+                            }
                         }
                     }
                 }
@@ -133,7 +146,6 @@ struct SkillsSheet: View {
             .sheet(isPresented: $showInstaller) {
                 SkillInstallSheet()
             }
-        }
     }
 
     @ViewBuilder
