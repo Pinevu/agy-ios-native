@@ -7,6 +7,8 @@ struct MessageActions {
     var retry: ((ChatItem) -> Void)?
     var deleteFrom: ((ChatItem) -> Void)?
     var speak: ((ChatItem, String) -> Void)?
+    var resumeContinue: (() -> Void)?
+    var resumeSwitchModel: (() -> Void)?
 
     static let none = MessageActions()
 }
@@ -15,6 +17,8 @@ struct MessageRow: View {
     let item: ChatItem
     /// 这条正在被流式写入：正文用 SwiftUI 渲染，保证贴底跟手
     var isLive: Bool = false
+    /// 是否为当前空闲会话的最后一条消息（用于在错误/中断卡片上展示一键续接操作）
+    var canRecover: Bool = false
     var actions: MessageActions = .none
     var isSpeaking: Bool = false
     var isLoadingTTS: Bool = false
@@ -60,18 +64,7 @@ struct MessageRow: View {
             EmptyView()
 
         case .error(let text):
-            HStack(alignment: .top, spacing: 6) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.red)
-                    .font(.system(size: 12))
-                Text(text)
-                    .font(.system(size: 13))
-                    .foregroundStyle(.red)
-            }
-            .padding(10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.red.opacity(0.08))
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            errorRecoveryCard(text: text)
 
         case .images(let paths):
             VStack(alignment: .leading, spacing: 8) {
@@ -81,6 +74,124 @@ struct MessageRow: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    private func isQuotaStyleError(_ text: String) -> Bool {
+        let low = text.lowercased()
+        return low.contains("额度") || low.contains("quota") || low.contains("429")
+            || low.contains("resource_exhausted") || low.contains("exit 3") || low.contains("rate limit")
+    }
+
+    private func errorRecoveryCard(text: String) -> some View {
+        let quotaLike = isQuotaStyleError(text)
+        let manualStop = text.contains("手动停止") || text.contains("已停止")
+        let tint: Color = manualStop ? .orange : .red
+        let headline: String = {
+            if quotaLike { return "模型额度已用光或限流中断" }
+            if manualStop { return "任务已暂停" }
+            return "执行意外中断"
+        }()
+
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 7) {
+                Image(systemName: manualStop ? "pause.circle.fill" : "exclamationmark.triangle.fill")
+                    .foregroundStyle(tint)
+                    .font(.system(size: 13.5))
+                    .padding(.top, 1)
+                VStack(alignment: .leading, spacing: 2) {
+                    if canRecover {
+                        Text(headline)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(tint)
+                    }
+                    Text(text)
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(canRecover ? Color.primary.opacity(0.82) : tint)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            if canRecover {
+                Text("上下文与已完成的文件修改均已保留，可直接续接或换模型接管：")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+
+                HStack(spacing: 8) {
+                    if quotaLike, let onSwitch = actions.resumeSwitchModel {
+                        Button(action: onSwitch) {
+                            Label("换模型续接", systemImage: "arrow.triangle.2.circlepath")
+                                .font(.system(size: 12.5, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(Color.accentColor, in: Capsule())
+                        }
+                        .buttonStyle(.borderless)
+
+                        if let onCont = actions.resumeContinue {
+                            Button(action: onCont) {
+                                Label("继续执行", systemImage: "play.fill")
+                                    .font(.system(size: 12.5, weight: .medium))
+                                    .foregroundStyle(.primary)
+                                    .padding(.horizontal, 11)
+                                    .padding(.vertical, 6)
+                                    .background(Color(.tertiarySystemFill), in: Capsule())
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                    } else {
+                        if let onCont = actions.resumeContinue {
+                            Button(action: onCont) {
+                                Label("继续执行", systemImage: "play.fill")
+                                    .font(.system(size: 12.5, weight: .semibold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 6)
+                                    .background(Color.accentColor, in: Capsule())
+                            }
+                            .buttonStyle(.borderless)
+                        }
+
+                        if let onSwitch = actions.resumeSwitchModel {
+                            Button(action: onSwitch) {
+                                Label("换模型续接", systemImage: "arrow.triangle.2.circlepath")
+                                    .font(.system(size: 12.5, weight: .medium))
+                                    .foregroundStyle(.primary)
+                                    .padding(.horizontal, 11)
+                                    .padding(.vertical, 6)
+                                    .background(Color(.tertiarySystemFill), in: Capsule())
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                    }
+
+                    if let onRetry = actions.retry {
+                        Button {
+                            onRetry(item)
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 28, height: 28)
+                                .background(Color(.tertiarySystemFill), in: Circle())
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("重试本轮")
+                    }
+
+                    Spacer(minLength: 0)
+                }
+                .padding(.top, 2)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(tint.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(tint.opacity(0.18), lineWidth: 0.7)
+        )
     }
 
     private func assistantActionBar(text: String) -> some View {

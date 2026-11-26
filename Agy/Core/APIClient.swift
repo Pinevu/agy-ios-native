@@ -215,7 +215,8 @@ final class APIClient {
         conversationId: String?,
         sessionId: String?,
         effort: String? = nil,
-        mode: String? = nil
+        mode: String? = nil,
+        resume: Bool = false
     ) async throws -> (id: String, conversationId: String?) {
         var payload: [String: Any] = ["prompt": prompt]
         if let m = model { payload["model"] = m }
@@ -223,6 +224,7 @@ final class APIClient {
         if let s = sessionId { payload["session_id"] = s }
         if let e = effort, !e.isEmpty { payload["effort"] = e }
         if let md = mode, !md.isEmpty, md != "auto" { payload["mode"] = md }
+        if resume { payload["resume"] = true }
         let body = try JSONSerialization.data(withJSONObject: payload)
         let r = try await send("api/run", method: "POST", body: body, as: RunResponse.self)
         guard let id = r.id else { throw APIError.server(r.error ?? "任务创建失败") }

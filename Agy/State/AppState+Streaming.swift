@@ -271,7 +271,7 @@ extension AppState {
 
     // MARK: - 发送 / 编辑 / 重试 / 删除 / 停止
 
-    func send() async {
+    func send(resume: Bool = false) async {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         if text.isEmpty && attachments.isEmpty { return }
 
@@ -316,7 +316,8 @@ extension AppState {
                 conversationId: conversationId,
                 sessionId: currentSession?.id,
                 effort: reasoningEffort.isEmpty ? nil : reasoningEffort,
-                mode: agentMode == "auto" ? nil : agentMode
+                mode: agentMode == "auto" ? nil : agentMode,
+                resume: resume
             )
             if let c = r.conversationId { conversationId = c }
             rememberModel(model, forSessionId: currentSession?.id ?? r.conversationId ?? r.id, conversationId: r.conversationId ?? conversationId)
@@ -348,6 +349,24 @@ extension AppState {
         } catch {
             items.append(ChatItem(kind: .error(text: error.localizedDescription)))
         }
+    }
+
+    /// 在原会话上下文中无缝续接执行（支持切换到其他有额度的模型接管）
+    func resumeInterruptedSession(switchingToModel newModelId: String? = nil) async {
+        guard !isCurrentTaskRunning else {
+            showToast("当前会话已在执行中")
+            return
+        }
+        var label = "继续执行未完成的任务"
+        if let newModelId, !newModelId.isEmpty {
+            let changed = (newModelId != model)
+            setModel(newModelId)
+            if changed {
+                label = "已切换为 \(currentModelName)，请无缝续接继续执行未完成的任务"
+            }
+        }
+        draft = label
+        await send(resume: true)
     }
 
     private func turnIndex(for idx: Int) -> Int? {
@@ -1032,9 +1051,39 @@ extension AppState {
         return out
     }
 
+    private static func enrichRawErrorHint(from rawText: String) -> String? {
+        let trimmed = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("AGY_ERROR:") {
+            let jsonPart = String(trimmed.dropFirst("AGY_ERROR:".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            if let data = jsonPart.data(using: .utf8),
+               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                let short = (obj["short_error"] as? String) ?? ""
+                let status = ((obj["status"] as? String) ?? "").uppercased()
+                let code = obj["error_code"] as? Int
+                if code == 429 || status == "RESOURCE_EXHAUSTED" || short.lowercased().contains("quota") {
+                    if let r = short.range(of: #"[Rr]esets in\s+[0-9dhms\s]+"#, options: .regularExpression) {
+                        let dur = short[r].replacingOccurrences(of: "Resets in", with: "", options: .caseInsensitive)
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                        return "当前模型额度已耗尽（约 \(dur) 后重置），可换模型或稍后继续"
+                    }
+                    return "当前模型额度已耗尽，可换模型或稍后继续"
+                }
+                if !short.isEmpty { return String(short.prefix(240)) }
+            }
+        }
+        if trimmed.lowercased().hasPrefix("error:") {
+            let rest = String(trimmed.dropFirst(6)).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !rest.isEmpty && rest.lowercased() != "interrupted" {
+                return String(rest.prefix(240))
+            }
+        }
+        return nil
+    }
+
     func buildItems(_ events: [ChatEvent]) -> [ChatItem] {
         var out: [ChatItem] = []
         var assistant: Int? = nil
+        var lastRawHint: String? = nil
 
         func appendAssistant(_ t: String) {
             if let i = assistant, i < out.count, case .assistant(let old) = out[i].kind {
@@ -1048,6 +1097,7 @@ extension AppState {
         for ev in events {
             switch ev.type {
             case "user_input":
+                lastRawHint = nil
                 let raw = ev.prompt ?? ""
                 var body: [String] = []
                 var paths: [String] = []
@@ -1062,16 +1112,23 @@ extension AppState {
                     }
                 }
                 var shown = body.isEmpty ? "已发送图片" : body.joined(separator: "\n")
-                if let r = shown.range(of: "【行为约定】") {
-                    let after = shown[r.lowerBound...]
-                    if let end = after.range(of: "\n\n") {
-                        shown = String(after[end.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                for marker in ["【行为约定】", "【系统续接提示】"] {
+                    if let r = shown.range(of: marker) {
+                        let after = shown[r.lowerBound...]
+                        if let end = after.range(of: "\n\n") {
+                            shown = String(after[end.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                        }
                     }
                 }
                 out.append(ChatItem(kind: .user(text: shown, attachments: [], remotePaths: paths),
                                     taskId: ev.taskId,
                                     rawText: shown))
                 assistant = nil
+
+            case "raw":
+                if let t = ev.text, let hint = Self.enrichRawErrorHint(from: t) {
+                    lastRawHint = hint
+                }
 
             case "text":
                 guard let t = ev.text, !t.isEmpty else { continue }
@@ -1116,8 +1173,20 @@ extension AppState {
                     if !fresh.isEmpty { out.append(ChatItem(kind: .images(fresh), taskId: ev.taskId)) }
                 }
                 if let e = ev.error, !e.isEmpty {
-                    out.append(ChatItem(kind: .error(text: e)))
+                    let displayErr: String
+                    if e.hasPrefix("exit "), let hint = lastRawHint {
+                        displayErr = hint
+                    } else {
+                        displayErr = e
+                    }
+                    // 避免旧数据中手动停止后再跟一条重复的 exit 1 错误卡片
+                    if let prev = out.last, case .error(let prevTxt) = prev.kind,
+                       prevTxt.contains("手动停止") && (e == "exit 1" || e == "exit -15") {
+                        break
+                    }
+                    out.append(ChatItem(kind: .error(text: displayErr)))
                 }
+                lastRawHint = nil
 
             default:
                 break

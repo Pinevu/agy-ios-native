@@ -37,6 +37,7 @@ private func sameChatKind(_ a: ChatItemKind, _ b: ChatItemKind) -> Bool {
 private struct ChatUnitRow: View, Equatable {
     let unit: ChatDisplayUnit
     let isLive: Bool
+    let canRecover: Bool
     let speakingItemId: UUID?
     let loadingTTSItemId: UUID?
     let menu: ChatItem?
@@ -44,7 +45,7 @@ private struct ChatUnitRow: View, Equatable {
     let actions: MessageActions
 
     static func == (a: ChatUnitRow, b: ChatUnitRow) -> Bool {
-        guard a.isLive == b.isLive, a.menu?.id == b.menu?.id else { return false }
+        guard a.isLive == b.isLive, a.canRecover == b.canRecover, a.menu?.id == b.menu?.id else { return false }
         switch (a.unit, b.unit) {
         case (.single(let x), .single(let y)):
             let aSpeak = a.speakingItemId == x.id
@@ -69,6 +70,7 @@ private struct ChatUnitRow: View, Equatable {
             MessageRow(
                 item: item,
                 isLive: isLive,
+                canRecover: canRecover,
                 actions: actions,
                 isSpeaking: speakingItemId == item.id,
                 isLoadingTTS: loadingTTSItemId == item.id,
@@ -97,6 +99,7 @@ struct ChatView: View {
     @State private var trailingScrollTask: Task<Void, Never>?
     @State private var turnCursor: Int = -1
     @State private var showModelPicker = false
+    @State private var showResumeModelPicker = false
     @State private var showAttach = false
     @State private var showPhotoPicker = false
     @State private var showFileImporter = false
@@ -309,6 +312,7 @@ struct ChatView: View {
         }
         .sheet(isPresented: $showRunningList) { runningSheet }
         .sheet(isPresented: $showModelPicker) { modelSheet }
+        .sheet(isPresented: $showResumeModelPicker) { resumeModelSheet }
         .sheet(isPresented: $showTransferSheet) {
             DraftTransferSheet(draftText: input) { target, replace in
                 let textToMove = input
@@ -671,6 +675,7 @@ struct ChatView: View {
                     ChatUnitRow(
                         unit: unit,
                         isLive: state.isCurrentTaskRunning && lastId == unit.id,
+                        canRecover: !state.isCurrentTaskRunning && lastId == unit.id,
                         speakingItemId: speech.speakingItemId,
                         loadingTTSItemId: speech.loadingTTSItemId,
                         menu: assistantMenu,
@@ -802,6 +807,14 @@ struct ChatView: View {
             },
             speak: { it, text in
                 speech.toggleSpeak(text: text, itemId: it.id)
+            },
+            resumeContinue: {
+                inputFocused = false
+                Task { await state.resumeInterruptedSession() }
+            },
+            resumeSwitchModel: {
+                inputFocused = false
+                showResumeModelPicker = true
             }
         )
     }
@@ -1833,6 +1846,107 @@ struct ChatView: View {
             await state.refreshModels(force: false)
         }
         .presentationDetents([.height(modelSheetHeight)])
+        .presentationDragIndicator(.visible)
+    }
+
+    // MARK: - 换模型无缝续接弹层（优先推荐不同额度池模型）
+
+    private func isClaudeOrGPT(_ id: String) -> Bool {
+        let low = id.lowercased()
+        return low.contains("claude") || low.contains("gpt")
+    }
+
+    private var sortedResumeModels: [(option: AppState.ModelOption, independentPool: Bool)] {
+        let currentThirdParty = isClaudeOrGPT(state.model)
+        let mapped = state.modelOptions.map { opt in
+            (option: opt, independentPool: isClaudeOrGPT(opt.id) != currentThirdParty)
+        }
+        return mapped.sorted { a, b in
+            if a.independentPool != b.independentPool { return a.independentPool }
+            if a.option.id == state.model { return false }
+            if b.option.id == state.model { return true }
+            return false
+        }
+    }
+
+    private var resumeModelSheet: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("换模型无缝续接")
+                        .font(.system(size: 16.5, weight: .semibold))
+                    Text("保留当前全部上下文与文件进度，选定模型后立即继续")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("取消") { showResumeModelPicker = false }
+                    .font(.system(size: 15))
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 16)
+            .padding(.bottom, 10)
+
+            Divider().opacity(0.35)
+
+            ScrollView {
+                VStack(spacing: 0) {
+                    let choices = sortedResumeModels
+                    ForEach(choices, id: \.option.id) { entry in
+                        let m = entry.option
+                        Button {
+                            showResumeModelPicker = false
+                            Task { await state.resumeInterruptedSession(switchingToModel: m.id) }
+                        } label: {
+                            HStack(spacing: 10) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    HStack(spacing: 6) {
+                                        Text(m.name)
+                                            .font(.system(size: 15.5, weight: .medium))
+                                            .foregroundStyle(.primary)
+                                        if entry.independentPool {
+                                            Text("独立额度 · 推荐")
+                                                .font(.system(size: 10, weight: .semibold))
+                                                .foregroundStyle(.green)
+                                                .padding(.horizontal, 6)
+                                                .padding(.vertical, 2)
+                                                .background(Color.green.opacity(0.13), in: Capsule())
+                                        } else if m.id == state.model {
+                                            Text("当前")
+                                                .font(.system(size: 10, weight: .medium))
+                                                .foregroundStyle(.secondary)
+                                                .padding(.horizontal, 6)
+                                                .padding(.vertical, 2)
+                                                .background(Color(.tertiarySystemFill), in: Capsule())
+                                        }
+                                    }
+                                    Text(m.id)
+                                        .font(.system(size: 11.5, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer(minLength: 4)
+                                Image(systemName: "play.circle.fill")
+                                    .font(.system(size: 20))
+                                    .foregroundStyle(entry.independentPool ? Color.accentColor : Color.secondary)
+                            }
+                            .padding(.horizontal, 18)
+                            .frame(height: 58)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+
+                        if m.id != choices.last?.option.id {
+                            Divider().opacity(0.35).padding(.leading, 18)
+                        }
+                    }
+                }
+                .padding(.bottom, 16)
+            }
+        }
+        .task(id: state.currentInstanceId) {
+            await state.refreshModels(force: false)
+        }
+        .presentationDetents([.height(min(100 + CGFloat(state.modelOptions.count) * 58 + 24, 580)), .large])
         .presentationDragIndicator(.visible)
     }
 }

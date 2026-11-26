@@ -201,11 +201,15 @@ struct ChatEvent: Decodable {
     let usage: Usage?
     let images: [String]?
     let error: String?
+    let errorKind: String?
+    let rawError: String?
 
     enum CodingKeys: String, CodingKey {
         case type, text, name, prompt, secs, output, params, usage, images, error
         case conversationId = "conversation_id"
         case taskId = "task_id"
+        case errorKind = "error_kind"
+        case rawError = "raw_error"
     }
 }
 
