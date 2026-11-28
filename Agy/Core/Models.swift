@@ -383,6 +383,56 @@ struct AgyAccountItem: Decodable, Identifiable, Equatable {
         case quotaError = "quota_error"
     }
 
+    init(
+        id: String,
+        email: String,
+        label: String,
+        authMethod: String? = nil,
+        active: Bool = false,
+        isPrimary: Bool? = nil,
+        addedAt: Double? = nil,
+        lastUsedAt: Double? = nil,
+        runningTasks: Int? = nil,
+        plan: String? = nil,
+        tier: String? = nil,
+        quotaOk: Bool? = nil,
+        quotaGroups: [QuotaGroup]? = nil,
+        quotaError: String? = nil
+    ) {
+        self.id = id
+        self.email = email
+        self.label = label
+        self.authMethod = authMethod
+        self.active = active
+        self.isPrimary = isPrimary
+        self.addedAt = addedAt
+        self.lastUsedAt = lastUsedAt
+        self.runningTasks = runningTasks
+        self.plan = plan
+        self.tier = tier
+        self.quotaOk = quotaOk
+        self.quotaGroups = quotaGroups
+        self.quotaError = quotaError
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(String.self, forKey: .id)
+        self.email = (try? c.decode(String.self, forKey: .email)) ?? ""
+        self.label = (try? c.decode(String.self, forKey: .label)) ?? ""
+        self.authMethod = try? c.decode(String.self, forKey: .authMethod)
+        self.active = (try? c.decode(Bool.self, forKey: .active)) ?? false
+        self.isPrimary = try? c.decode(Bool.self, forKey: .isPrimary)
+        self.addedAt = try? c.decode(Double.self, forKey: .addedAt)
+        self.lastUsedAt = try? c.decode(Double.self, forKey: .lastUsedAt)
+        self.runningTasks = try? c.decode(Int.self, forKey: .runningTasks)
+        self.plan = try? c.decode(String.self, forKey: .plan)
+        self.tier = try? c.decode(String.self, forKey: .tier)
+        self.quotaOk = try? c.decode(Bool.self, forKey: .quotaOk)
+        self.quotaGroups = try? c.decode([QuotaGroup].self, forKey: .quotaGroups)
+        self.quotaError = try? c.decode(String.self, forKey: .quotaError)
+    }
+
     var displayLabel: String {
         let clean = label.trimmingCharacters(in: .whitespacesAndNewlines)
         if !clean.isEmpty { return clean }
