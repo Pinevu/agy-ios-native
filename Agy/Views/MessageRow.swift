@@ -9,6 +9,7 @@ struct MessageActions {
     var speak: ((ChatItem, String) -> Void)?
     var resumeContinue: (() -> Void)?
     var resumeSwitchModel: (() -> Void)?
+    var resumeSwitchAccount: (() -> Void)?
 
     static let none = MessageActions()
 }
@@ -82,12 +83,19 @@ struct MessageRow: View {
             || low.contains("resource_exhausted") || low.contains("exit 3") || low.contains("rate limit")
     }
 
+    private func isAuthStyleError(_ text: String) -> Bool {
+        let low = text.lowercased()
+        return low.contains("凭证") || low.contains("401") || low.contains("unauthenticated") || low.contains("permission_denied")
+    }
+
     private func errorRecoveryCard(text: String) -> some View {
         let quotaLike = isQuotaStyleError(text)
+        let authLike = isAuthStyleError(text)
         let manualStop = text.contains("手动停止") || text.contains("已停止")
         let tint: Color = manualStop ? .orange : .red
         let headline: String = {
             if quotaLike { return "模型额度已用光或限流中断" }
+            if authLike { return "账号凭证异常中断" }
             if manualStop { return "任务已暂停" }
             return "执行意外中断"
         }()
@@ -112,74 +120,101 @@ struct MessageRow: View {
             }
 
             if canRecover {
-                Text("上下文与已完成的文件修改均已保留，可直接续接或换模型接管：")
+                Text("上下文与已完成的文件修改均已保留，可直接续接、换模型或切换账号接管：")
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
 
-                HStack(spacing: 8) {
-                    if quotaLike, let onSwitch = actions.resumeSwitchModel {
-                        Button(action: onSwitch) {
-                            Label("换模型续接", systemImage: "arrow.triangle.2.circlepath")
-                                .font(.system(size: 12.5, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .background(Color.accentColor, in: Capsule())
-                        }
-                        .buttonStyle(.borderless)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        if quotaLike || authLike {
+                            if let onSwitchAcct = actions.resumeSwitchAccount {
+                                Button(action: onSwitchAcct) {
+                                    Label("换号续接", systemImage: "person.2.fill")
+                                        .font(.system(size: 12.5, weight: .semibold))
+                                        .foregroundStyle(.white)
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 6)
+                                        .background(Color.indigo, in: Capsule())
+                                }
+                                .buttonStyle(.borderless)
+                            }
 
-                        if let onCont = actions.resumeContinue {
-                            Button(action: onCont) {
-                                Label("继续执行", systemImage: "play.fill")
-                                    .font(.system(size: 12.5, weight: .medium))
-                                    .foregroundStyle(.primary)
-                                    .padding(.horizontal, 11)
-                                    .padding(.vertical, 6)
-                                    .background(Color(.tertiarySystemFill), in: Capsule())
+                            if quotaLike, let onSwitch = actions.resumeSwitchModel {
+                                Button(action: onSwitch) {
+                                    Label("换模型续接", systemImage: "arrow.triangle.2.circlepath")
+                                        .font(.system(size: 12.5, weight: .semibold))
+                                        .foregroundStyle(.white)
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 6)
+                                        .background(Color.accentColor, in: Capsule())
+                                }
+                                .buttonStyle(.borderless)
                             }
-                            .buttonStyle(.borderless)
-                        }
-                    } else {
-                        if let onCont = actions.resumeContinue {
-                            Button(action: onCont) {
-                                Label("继续执行", systemImage: "play.fill")
-                                    .font(.system(size: 12.5, weight: .semibold))
-                                    .foregroundStyle(.white)
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 6)
-                                    .background(Color.accentColor, in: Capsule())
+
+                            if let onCont = actions.resumeContinue {
+                                Button(action: onCont) {
+                                    Label("继续执行", systemImage: "play.fill")
+                                        .font(.system(size: 12.5, weight: .medium))
+                                        .foregroundStyle(.primary)
+                                        .padding(.horizontal, 11)
+                                        .padding(.vertical, 6)
+                                        .background(Color(.tertiarySystemFill), in: Capsule())
+                                }
+                                .buttonStyle(.borderless)
                             }
-                            .buttonStyle(.borderless)
+                        } else {
+                            if let onCont = actions.resumeContinue {
+                                Button(action: onCont) {
+                                    Label("继续执行", systemImage: "play.fill")
+                                        .font(.system(size: 12.5, weight: .semibold))
+                                        .foregroundStyle(.white)
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 6)
+                                        .background(Color.accentColor, in: Capsule())
+                                }
+                                .buttonStyle(.borderless)
+                            }
+
+                            if let onSwitch = actions.resumeSwitchModel {
+                                Button(action: onSwitch) {
+                                    Label("换模型", systemImage: "arrow.triangle.2.circlepath")
+                                        .font(.system(size: 12.5, weight: .medium))
+                                        .foregroundStyle(.primary)
+                                        .padding(.horizontal, 11)
+                                        .padding(.vertical, 6)
+                                        .background(Color(.tertiarySystemFill), in: Capsule())
+                                }
+                                .buttonStyle(.borderless)
+                            }
+
+                            if let onSwitchAcct = actions.resumeSwitchAccount {
+                                Button(action: onSwitchAcct) {
+                                    Label("换号", systemImage: "person.2")
+                                        .font(.system(size: 12.5, weight: .medium))
+                                        .foregroundStyle(.primary)
+                                        .padding(.horizontal, 11)
+                                        .padding(.vertical, 6)
+                                        .background(Color(.tertiarySystemFill), in: Capsule())
+                                }
+                                .buttonStyle(.borderless)
+                            }
                         }
 
-                        if let onSwitch = actions.resumeSwitchModel {
-                            Button(action: onSwitch) {
-                                Label("换模型续接", systemImage: "arrow.triangle.2.circlepath")
-                                    .font(.system(size: 12.5, weight: .medium))
-                                    .foregroundStyle(.primary)
-                                    .padding(.horizontal, 11)
-                                    .padding(.vertical, 6)
-                                    .background(Color(.tertiarySystemFill), in: Capsule())
+                        if let onRetry = actions.retry {
+                            Button {
+                                onRetry(item)
+                            } label: {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 28, height: 28)
+                                    .background(Color(.tertiarySystemFill), in: Circle())
                             }
                             .buttonStyle(.borderless)
+                            .accessibilityLabel("重试本轮")
                         }
                     }
-
-                    if let onRetry = actions.retry {
-                        Button {
-                            onRetry(item)
-                        } label: {
-                            Image(systemName: "arrow.clockwise")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(.secondary)
-                                .frame(width: 28, height: 28)
-                                .background(Color(.tertiarySystemFill), in: Circle())
-                        }
-                        .buttonStyle(.borderless)
-                        .accessibilityLabel("重试本轮")
-                    }
-
-                    Spacer(minLength: 0)
+                    .padding(.vertical, 1)
                 }
                 .padding(.top, 2)
             }

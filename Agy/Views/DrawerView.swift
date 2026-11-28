@@ -941,6 +941,21 @@ struct QuotaSheet: View {
                         }
                         .padding(.horizontal, 2)
 
+                        if let accEmail = q.accountEmail ?? state.activeAccount?.email, !accEmail.isEmpty {
+                            HStack(spacing: 6) {
+                                Image(systemName: "person.crop.circle.fill")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.indigo)
+                                Text(accEmail)
+                                    .font(.system(size: 12, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                Spacer()
+                            }
+                            .padding(.horizontal, 2)
+                            .padding(.top, -8)
+                        }
+
                         if let groups = q.groups, !groups.isEmpty {
                             ForEach(groups) { g in
                                 VStack(alignment: .leading, spacing: 0) {

@@ -274,6 +274,8 @@ struct ServerRunning: Decodable {
     let elapsed: Int?
     let latestTool: RunningToolInfo?
     let subagentCount: Int?
+    let accountId: String?
+    let accountEmail: String?
 
     var latestToolName: String? {
         guard let n = latestTool?.name, !n.isEmpty else { return nil }
@@ -287,6 +289,8 @@ struct ServerRunning: Decodable {
         case conversationId = "conversation_id"
         case latestTool = "latest_tool"
         case subagentCount = "subagent_count"
+        case accountId = "account_id"
+        case accountEmail = "account_email"
     }
 }
 
@@ -296,12 +300,22 @@ struct QuotaResponse: Decodable {
     let ok: Bool?
     let error: String?
     let plan: String?
+    let accountId: String?
+    let accountEmail: String?
+    let accountLabel: String?
     let groups: [QuotaGroup]?
     let buckets: [QuotaBucket]?
     let week: WeekStat?
+
+    enum CodingKeys: String, CodingKey {
+        case ok, error, plan, groups, buckets, week
+        case accountId = "account_id"
+        case accountEmail = "account_email"
+        case accountLabel = "account_label"
+    }
 }
 
-struct QuotaBucket: Decodable, Identifiable {
+struct QuotaBucket: Decodable, Identifiable, Equatable {
     let model: String?
     let label: String
     let remaining: Double?
@@ -315,7 +329,7 @@ struct QuotaBucket: Decodable, Identifiable {
     }
 }
 
-struct QuotaGroup: Decodable, Identifiable {
+struct QuotaGroup: Decodable, Identifiable, Equatable {
     let name: String
     let desc: String?
     let count: Int?
@@ -324,7 +338,7 @@ struct QuotaGroup: Decodable, Identifiable {
     var id: String { name }
 }
 
-struct QuotaWindow: Decodable, Identifiable {
+struct QuotaWindow: Decodable, Identifiable, Equatable {
     let window: String?
     let label: String
     let remaining: Double?
@@ -336,6 +350,101 @@ struct QuotaWindow: Decodable, Identifiable {
     enum CodingKeys: String, CodingKey {
         case window, label, remaining, desc
         case resetAt = "reset_at"
+    }
+}
+
+// MARK: - Antigravity 多账号池
+
+struct AgyAccountItem: Decodable, Identifiable, Equatable {
+    let id: String
+    let email: String
+    var label: String
+    let authMethod: String?
+    var active: Bool
+    let isPrimary: Bool?
+    let addedAt: Double?
+    let lastUsedAt: Double?
+    let runningTasks: Int?
+    let plan: String?
+    let tier: String?
+    let quotaOk: Bool?
+    let quotaGroups: [QuotaGroup]?
+    let quotaError: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, email, label, active, plan, tier
+        case authMethod = "auth_method"
+        case isPrimary = "is_primary"
+        case addedAt = "added_at"
+        case lastUsedAt = "last_used_at"
+        case runningTasks = "running_tasks"
+        case quotaOk = "quota_ok"
+        case quotaGroups = "quota_groups"
+        case quotaError = "quota_error"
+    }
+
+    var displayLabel: String {
+        let clean = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !clean.isEmpty { return clean }
+        return email.components(separatedBy: "@").first ?? email
+    }
+
+    /// 评估某池（Gemini 或 Claude/GPT）当前是否还有有效余量（要求 5h 与 weekly 均 > 0，若仅一项存在则取该项）
+    func effectiveRemaining(thirdParty: Bool) -> Double? {
+        guard let groups = quotaGroups, !groups.isEmpty else { return nil }
+        let matched = groups.first { g in
+            let n = g.name.lowercased()
+            if thirdParty {
+                return n.contains("claude") || n.contains("gpt") || n.contains("third")
+            } else {
+                return n.contains("gemini") && !n.contains("argon")
+            }
+        }
+        guard let group = matched else { return nil }
+        let vals = group.windows.compactMap(\.remaining)
+        guard !vals.isEmpty else { return nil }
+        return vals.min()
+    }
+}
+
+struct AccountsListResponse: Decodable {
+    let ok: Bool?
+    let activeId: String?
+    let accounts: [AgyAccountItem]?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case ok, accounts, error
+        case activeId = "active_id"
+    }
+}
+
+struct AccountMutationResponse: Decodable {
+    let ok: Bool?
+    let activeId: String?
+    let account: AgyAccountItem?
+    let updatedExisting: Bool?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case ok, account, error
+        case activeId = "active_id"
+        case updatedExisting = "updated_existing"
+    }
+}
+
+struct OAuthStartResponse: Decodable {
+    let ok: Bool?
+    let sessionId: String?
+    let authUrl: String?
+    let expiresIn: Int?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case ok, error
+        case sessionId = "session_id"
+        case authUrl = "auth_url"
+        case expiresIn = "expires_in"
     }
 }
 

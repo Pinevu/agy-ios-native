@@ -89,6 +89,10 @@ final class AppState: ObservableObject {
     var instanceEpoch: Int = 0
     @Published var lastQuotaSnapshot: QuotaResponse?
     @Published var isLoadingModels = false
+    @Published var accounts: [AgyAccountItem] = []
+    @Published var activeAccountId: String? = nil
+    @Published var isLoadingAccounts = false
+    @Published var isSwitchingAccount = false
     var bgTaskId: UIBackgroundTaskIdentifier = .invalid
 
     // MARK: - 输入与跨会话草稿
@@ -253,7 +257,8 @@ final class AppState: ObservableObject {
             async let jTask: Void = refreshJobs()
             async let skTask: Void = refreshSkills()
             async let capTask: Void = refreshAgentCapabilities(forEpoch: epoch)
-            _ = await (mdlTask, sTask, mTask, rTask, qTask, jTask, skTask, capTask)
+            async let accTask: Void = refreshAccounts(withQuota: false, force: false, forEpoch: epoch)
+            _ = await (mdlTask, sTask, mTask, rTask, qTask, jTask, skTask, capTask, accTask)
             guard epoch == instanceEpoch else { return }
 
             // 若服务端有正在执行的任务，冷启动（划掉 App 重进）直接自动续接该会话并挂上实时 SSE
@@ -341,7 +346,8 @@ final class AppState: ObservableObject {
             async let jTask: Void = refreshJobs()
             async let skTask: Void = refreshSkills()
             async let capTask: Void = refreshAgentCapabilities(forEpoch: epoch)
-            _ = await (mdlTask, mTask, sTask, rTask, qTask, jTask, skTask, capTask)
+            async let accTask: Void = refreshAccounts(withQuota: false, force: false, forEpoch: epoch)
+            _ = await (mdlTask, mTask, sTask, rTask, qTask, jTask, skTask, capTask, accTask)
             guard epoch == instanceEpoch else { return }
             syncWidgetSnapshot()
             startRunningPoller()
@@ -406,6 +412,10 @@ final class AppState: ObservableObject {
         memoryFiles = []
         memoryCharCount = 0
         lastQuotaSnapshot = nil
+        accounts = []
+        activeAccountId = nil
+        isLoadingAccounts = false
+        isSwitchingAccount = false
         modelOptions = AppState.models
         sessionModels = [:]
 
@@ -451,7 +461,8 @@ final class AppState: ObservableObject {
             async let sTask: Void = refreshSessions()
             async let rTask: Void = syncRunning()
             async let capTask: Void = refreshAgentCapabilities(forEpoch: epoch)
-            _ = await (mdlTask, qTask, sTask, rTask, capTask)
+            async let accTask: Void = refreshAccounts(withQuota: false, force: false, forEpoch: epoch)
+            _ = await (mdlTask, qTask, sTask, rTask, capTask, accTask)
             syncWidgetSnapshot()
             showToast("已刷新 \(inst.name)")
             return
@@ -493,7 +504,8 @@ final class AppState: ObservableObject {
             async let jTask: Void = refreshJobs()
             async let skTask: Void = refreshSkills()
             async let capTask: Void = refreshAgentCapabilities(forEpoch: epoch)
-            _ = await (mdlTask, mTask, sTask, rTask, qTask, jTask, skTask, capTask)
+            async let accTask: Void = refreshAccounts(withQuota: false, force: false, forEpoch: epoch)
+            _ = await (mdlTask, mTask, sTask, rTask, qTask, jTask, skTask, capTask, accTask)
             guard epoch == instanceEpoch else { return }
             syncWidgetSnapshot()
             startRunningPoller()

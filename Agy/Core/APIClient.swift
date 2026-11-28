@@ -216,7 +216,8 @@ final class APIClient {
         sessionId: String?,
         effort: String? = nil,
         mode: String? = nil,
-        resume: Bool = false
+        resume: Bool = false,
+        accountId: String? = nil
     ) async throws -> (id: String, conversationId: String?) {
         var payload: [String: Any] = ["prompt": prompt]
         if let m = model { payload["model"] = m }
@@ -225,6 +226,7 @@ final class APIClient {
         if let e = effort, !e.isEmpty { payload["effort"] = e }
         if let md = mode, !md.isEmpty, md != "auto" { payload["mode"] = md }
         if resume { payload["resume"] = true }
+        if let aid = accountId, !aid.isEmpty { payload["account_id"] = aid }
         let body = try JSONSerialization.data(withJSONObject: payload)
         let r = try await send("api/run", method: "POST", body: body, as: RunResponse.self)
         guard let id = r.id else { throw APIError.server(r.error ?? "任务创建失败") }
@@ -436,6 +438,60 @@ final class APIClient {
     func deleteAgentMemoryFile(_ name: String) async throws -> AgentMemoryResponse {
         let safe = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
         return try await send("api/agent/memory/\(safe)", method: "DELETE", as: AgentMemoryResponse.self)
+    }
+
+    // MARK: - Antigravity 多账号管理
+
+    func accounts(withQuota: Bool = true, force: Bool = false) async throws -> AccountsListResponse {
+        var items = [URLQueryItem(name: "with_quota", value: withQuota ? "1" : "0")]
+        if force { items.append(URLQueryItem(name: "force", value: "1")) }
+        return try await send("api/accounts", queryItems: items, timeout: withQuota ? 30 : 12, as: AccountsListResponse.self)
+    }
+
+    func switchAccount(_ id: String) async throws -> AccountMutationResponse {
+        let body = try JSONSerialization.data(withJSONObject: ["id": id])
+        return try await send("api/accounts/switch", method: "POST", body: body, as: AccountMutationResponse.self)
+    }
+
+    func renameAccount(id: String, label: String) async throws -> AccountMutationResponse {
+        let body = try JSONSerialization.data(withJSONObject: ["id": id, "label": label])
+        return try await send("api/accounts/rename", method: "POST", body: body, as: AccountMutationResponse.self)
+    }
+
+    func deleteAccount(_ id: String) async throws -> AccountMutationResponse {
+        let safe = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        return try await send("api/accounts/\(safe)", method: "DELETE", as: AccountMutationResponse.self)
+    }
+
+    func importAccountToken(_ tokenJSON: String, label: String? = nil, switchAfter: Bool = true) async throws -> AccountMutationResponse {
+        var payload: [String: Any] = ["token_json": tokenJSON, "switch": switchAfter]
+        if let l = label?.trimmingCharacters(in: .whitespacesAndNewlines), !l.isEmpty {
+            payload["label"] = l
+        }
+        let body = try JSONSerialization.data(withJSONObject: payload)
+        return try await send("api/accounts/import", method: "POST", body: body, timeout: 35, as: AccountMutationResponse.self)
+    }
+
+    func startOAuthLogin() async throws -> OAuthStartResponse {
+        try await send("api/accounts/oauth/start", method: "POST", body: Data("{}".utf8), timeout: 20, as: OAuthStartResponse.self)
+    }
+
+    func finishOAuthLogin(sessionId: String, code: String, label: String? = nil, switchAfter: Bool = true) async throws -> AccountMutationResponse {
+        var payload: [String: Any] = [
+            "session_id": sessionId,
+            "code": code,
+            "switch": switchAfter
+        ]
+        if let l = label?.trimmingCharacters(in: .whitespacesAndNewlines), !l.isEmpty {
+            payload["label"] = l
+        }
+        let body = try JSONSerialization.data(withJSONObject: payload)
+        return try await send("api/accounts/oauth/finish", method: "POST", body: body, timeout: 35, as: AccountMutationResponse.self)
+    }
+
+    func cancelOAuthLogin(sessionId: String) async {
+        guard let body = try? JSONSerialization.data(withJSONObject: ["session_id": sessionId]) else { return }
+        _ = try? await send("api/accounts/oauth/cancel", method: "POST", body: body, as: EmptyResponse.self)
     }
 
     // MARK: - 上传

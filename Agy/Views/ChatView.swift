@@ -100,6 +100,8 @@ struct ChatView: View {
     @State private var turnCursor: Int = -1
     @State private var showModelPicker = false
     @State private var showResumeModelPicker = false
+    @State private var showResumeAccountPicker = false
+    @State private var showAccountsManager = false
     @State private var showAttach = false
     @State private var showPhotoPicker = false
     @State private var showFileImporter = false
@@ -313,6 +315,8 @@ struct ChatView: View {
         .sheet(isPresented: $showRunningList) { runningSheet }
         .sheet(isPresented: $showModelPicker) { modelSheet }
         .sheet(isPresented: $showResumeModelPicker) { resumeModelSheet }
+        .sheet(isPresented: $showResumeAccountPicker) { resumeAccountSheet }
+        .sheet(isPresented: $showAccountsManager) { AccountsSheet() }
         .sheet(isPresented: $showTransferSheet) {
             DraftTransferSheet(draftText: input) { target, replace in
                 let textToMove = input
@@ -815,6 +819,10 @@ struct ChatView: View {
             resumeSwitchModel: {
                 inputFocused = false
                 showResumeModelPicker = true
+            },
+            resumeSwitchAccount: {
+                inputFocused = false
+                showResumeAccountPicker = true
             }
         )
     }
@@ -1947,6 +1955,151 @@ struct ChatView: View {
             await state.refreshModels(force: false)
         }
         .presentationDetents([.height(min(100 + CGFloat(state.modelOptions.count) * 58 + 24, 580)), .large])
+        .presentationDragIndicator(.visible)
+    }
+
+    // MARK: - 换号无缝续接弹层（优先推荐其他有余量的 Google 账号）
+
+    private var sortedResumeAccounts: [(account: AgyAccountItem, recommended: Bool, poolRem: Double?)] {
+        let thirdParty = isClaudeOrGPT(state.model)
+        return state.accounts.map { acct in
+            let rem = acct.effectiveRemaining(thirdParty: thirdParty)
+            let rec = !acct.active && ((rem ?? 0) > 0.01)
+            return (account: acct, recommended: rec, poolRem: rem)
+        }.sorted { a, b in
+            if a.recommended != b.recommended { return a.recommended }
+            if a.account.active != b.account.active { return !a.account.active }
+            return (a.poolRem ?? -1) > (b.poolRem ?? -1)
+        }
+    }
+
+    private func resumeAccountQuotaSummary(_ acct: AgyAccountItem) -> String {
+        guard let groups = acct.quotaGroups, !groups.isEmpty else {
+            return acct.quotaError ?? "正在加载配额…"
+        }
+        let parts: [String] = groups.prefix(2).compactMap { g in
+            let low = g.name.lowercased()
+            let title = low.contains("gemini") ? "Gemini" : ((low.contains("claude") || low.contains("gpt")) ? "Claude/GPT" : g.name)
+            let rem = g.windows.compactMap(\.remaining).min()
+            guard let rem else { return nil }
+            return "\(title) \(Int((rem * 100).rounded()))%"
+        }
+        return parts.isEmpty ? "配额已就绪" : parts.joined(separator: " · ")
+    }
+
+    private var resumeAccountSheet: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("切换账号无缝续接")
+                        .font(.system(size: 16.5, weight: .semibold))
+                    Text("保留当前全部对话上下文与文件进度，选定账号后立即继续")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("取消") { showResumeAccountPicker = false }
+                    .font(.system(size: 15))
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 16)
+            .padding(.bottom, 10)
+
+            Divider().opacity(0.35)
+
+            ScrollView {
+                VStack(spacing: 0) {
+                    let choices = sortedResumeAccounts
+                    if choices.isEmpty {
+                        VStack(spacing: 10) {
+                            Text("暂未获取到可用账号")
+                                .font(.system(size: 14.5))
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 28)
+                    } else {
+                        ForEach(choices, id: \.account.id) { entry in
+                            let acct = entry.account
+                            Button {
+                                showResumeAccountPicker = false
+                                Task { await state.resumeInterruptedSession(switchingToAccount: acct) }
+                            } label: {
+                                HStack(spacing: 12) {
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        HStack(spacing: 6) {
+                                            Text(acct.displayLabel)
+                                                .font(.system(size: 15.5, weight: .semibold))
+                                                .foregroundStyle(.primary)
+                                            if entry.recommended {
+                                                Text("有余量 · 推荐")
+                                                    .font(.system(size: 10, weight: .semibold))
+                                                    .foregroundStyle(.green)
+                                                    .padding(.horizontal, 6)
+                                                    .padding(.vertical, 2)
+                                                    .background(Color.green.opacity(0.13), in: Capsule())
+                                            } else if acct.active {
+                                                Text("当前账号")
+                                                    .font(.system(size: 10, weight: .medium))
+                                                    .foregroundStyle(.secondary)
+                                                    .padding(.horizontal, 6)
+                                                    .padding(.vertical, 2)
+                                                    .background(Color(.tertiarySystemFill), in: Capsule())
+                                            }
+                                            if let plan = acct.plan, !plan.isEmpty, plan != "-" {
+                                                Text(plan.replacingOccurrences(of: "Google AI ", with: "AI "))
+                                                    .font(.system(size: 10, weight: .medium))
+                                                    .foregroundStyle(.secondary)
+                                            }
+                                        }
+                                        Text("\(acct.email) · \(resumeAccountQuotaSummary(acct))")
+                                            .font(.system(size: 11.5))
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                    }
+                                    Spacer(minLength: 4)
+                                    Image(systemName: "play.circle.fill")
+                                        .font(.system(size: 20))
+                                        .foregroundStyle(entry.recommended ? Color.indigo : Color.secondary)
+                                }
+                                .padding(.horizontal, 18)
+                                .frame(height: 64)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+
+                            if acct.id != choices.last?.account.id {
+                                Divider().opacity(0.35).padding(.leading, 18)
+                            }
+                        }
+                    }
+
+                    Divider().opacity(0.35).padding(.top, 4)
+
+                    Button {
+                        showResumeAccountPicker = false
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                            showAccountsManager = true
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "person.badge.plus")
+                                .font(.system(size: 14, weight: .semibold))
+                            Text("添加或管理 Google 账号")
+                                .font(.system(size: 14.5, weight: .medium))
+                        }
+                        .foregroundStyle(Color.accentColor)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.bottom, 12)
+            }
+        }
+        .task(id: state.currentInstanceId) {
+            await state.refreshAccounts(withQuota: true, force: false)
+        }
+        .presentationDetents([.height(min(170 + CGFloat(max(1, state.accounts.count)) * 64, 460)), .medium])
         .presentationDragIndicator(.visible)
     }
 }

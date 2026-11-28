@@ -1,6 +1,7 @@
 import SwiftUI
 
 private enum SettingsRoute: Hashable {
+    case accounts
     case usage
     case skills
     case mcp
@@ -32,6 +33,14 @@ struct SettingsSheet: View {
 
     private var memoryActiveBadge: String? {
         (!state.globalMemory.isEmpty || !state.memoryFiles.isEmpty || !state.agentSoul.rules.isEmpty) ? "已生效" : nil
+    }
+
+    private var accountSummaryBadge: String? {
+        guard let acc = state.activeAccount else { return nil }
+        if state.accounts.count > 1 {
+            return "\(acc.displayLabel) · \(state.accounts.count)个"
+        }
+        return acc.displayLabel
     }
 
     var body: some View {
@@ -72,6 +81,15 @@ struct SettingsSheet: View {
                         .padding(.vertical, 2)
                     }
                     .buttonStyle(.borderless)
+
+                    NavigationLink(value: SettingsRoute.accounts) {
+                        settingsRow(
+                            title: "Antigravity 账号",
+                            icon: "person.crop.circle.badge.checkmark",
+                            tint: .indigo,
+                            badge: accountSummaryBadge
+                        )
+                    }
 
                     NavigationLink(value: SettingsRoute.usage) {
                         settingsRow(
@@ -317,6 +335,8 @@ struct SettingsSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: SettingsRoute.self) { route in
                 switch route {
+                case .accounts:
+                    AccountsSheet(embedded: true)
                 case .usage:
                     QuotaSheet(embedded: true)
                 case .skills:
