@@ -2,6 +2,16 @@ import SwiftUI
 import UIKit
 
 final class AgyAppDelegate: NSObject, UIApplicationDelegate {
+    func application(
+        _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        Task { @MainActor in
+            LocalNotificationManager.shared.configureDelegate()
+        }
+        return true
+    }
+
     func applicationWillTerminate(_ application: UIApplication) {
         LiveActivityManager.terminateAllActivitiesSync()
     }

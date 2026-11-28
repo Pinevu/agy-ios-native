@@ -28,12 +28,12 @@ targets:
       - sdk: SwiftUI.framework
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: app.lake9674.aquila8809.widget
+        PRODUCT_BUNDLE_IDENTIFIER: cc.nooh.antigravity.widget
         PRODUCT_NAME: AgyWidget
         SWIFT_VERSION: "5.9"
         TARGETED_DEVICE_FAMILY: "1"
-        MARKETING_VERSION: "6.3.0"
-        CURRENT_PROJECT_VERSION: "114"
+        MARKETING_VERSION: "6.3.1"
+        CURRENT_PROJECT_VERSION: "115"
         CODE_SIGN_IDENTITY: ""
         CODE_SIGNING_REQUIRED: "NO"
         CODE_SIGNING_ALLOWED: "NO"
@@ -78,15 +78,16 @@ targets:
       - sdk: AppIntents.framework
       - sdk: LocalAuthentication.framework
       - sdk: Security.framework
+      - sdk: UserNotifications.framework
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: app.lake9674.aquila8809
+        PRODUCT_BUNDLE_IDENTIFIER: cc.nooh.antigravity
         PRODUCT_NAME: Agy
         INFOPLIST_FILE: Agy/Info.plist
         SWIFT_VERSION: "5.9"
         TARGETED_DEVICE_FAMILY: "1"
-        MARKETING_VERSION: "6.3.0"
-        CURRENT_PROJECT_VERSION: "114"
+        MARKETING_VERSION: "6.3.1"
+        CURRENT_PROJECT_VERSION: "115"
         CODE_SIGN_IDENTITY: ""
         CODE_SIGNING_REQUIRED: "NO"
         CODE_SIGNING_ALLOWED: "NO"

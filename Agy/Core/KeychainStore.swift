@@ -1,9 +1,15 @@
 import Foundation
 import Security
 
-/// iOS Keychain 凭证存储（自动静默迁移旧版明文 UserDefaults 令牌）
+/// iOS Keychain 凭证存储（按当前 Bundle ID 动态隔离，避免与同证书其他 IPA 冲突；并兼容旧版令牌自动迁移）
 enum KeychainStore {
-    private static let service = "app.lake9674.aquila8809.tokens"
+    private static let legacyService = "app.lake9674.aquila8809.tokens"
+
+    private static var service: String {
+        let bid = Bundle.main.bundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let base = (bid?.isEmpty == false) ? bid! : "cc.nooh.antigravity"
+        return "\(base).tokens"
+    }
 
     static func save(_ value: String, account: String) {
         let data = Data(value.utf8)
@@ -20,9 +26,23 @@ enum KeychainStore {
     }
 
     static func load(account: String) -> String? {
+        if let hit = loadFromService(service, account: account) {
+            return hit
+        }
+        // 同团队证书换独立包名后，仅对 Antigravity 自有键前缀做一次只读迁移，绝不触碰其他 IPA 数据
+        if service != legacyService,
+           (account.hasPrefix("agy_token::") || account.hasPrefix("agy_custom_")),
+           let migrated = loadFromService(legacyService, account: account) {
+            save(migrated, account: account)
+            return migrated
+        }
+        return nil
+    }
+
+    private static func loadFromService(_ svc: String, account: String) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
+            kSecAttrService as String: svc,
             kSecAttrAccount as String: account,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne

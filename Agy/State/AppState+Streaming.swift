@@ -512,12 +512,23 @@ extension AppState {
         guard let rt = running[taskId] else { return }
         let sid = rt.sessionId
         let convId = rt.conversationId
+        let taskTitle = rt.title
         rt.stream?.cancel()
 
         if running.count <= 1 && serverRunning.values.allSatisfy({ $0.taskId == taskId }) {
             LiveActivityManager.shared.end()
             endBackgroundGraceTask()
         }
+        let hasTrailingError: Bool = {
+            let checkArr = taskBuffers[taskId] ?? (activeSessionKey == sid ? items : [])
+            if let last = checkArr.last, case .error = last.kind { return true }
+            return false
+        }()
+        LocalNotificationManager.shared.notifyTaskFinished(
+            title: taskTitle,
+            sessionId: convId ?? sid,
+            isError: hasTrailingError
+        )
 
         if !(pendingText[taskId] ?? "").isEmpty {
             let chunk = pendingText[taskId] ?? ""

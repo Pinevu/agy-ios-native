@@ -15,6 +15,7 @@ struct SettingsSheet: View {
     @EnvironmentObject var state: AppState
     @EnvironmentObject var appLock: AppLockManager
     @ObservedObject private var speech = SpeechManager.shared
+    @ObservedObject private var localNotify = LocalNotificationManager.shared
     @Environment(\.dismiss) private var dismiss
 
     var onClose: (() -> Void)? = nil
@@ -188,6 +189,28 @@ struct SettingsSheet: View {
                     }
 
                     Toggle(isOn: Binding(
+                        get: { localNotify.isEnabled },
+                        set: { target in
+                            Task {
+                                let ok = await localNotify.setEnabled(target)
+                                if target && !ok {
+                                    state.showToast("请在系统设置中允许通知权限")
+                                } else {
+                                    state.showToast(target ? "已开启任务完成通知" : "已关闭任务完成通知")
+                                }
+                            }
+                        }
+                    )) {
+                        settingsRow(
+                            title: AgySharedStore.provisioningInfo.hasTimeSensitiveNotifications
+                                ? "任务完成通知（时效）"
+                                : "任务完成通知",
+                            icon: "bell.badge.fill",
+                            tint: .red
+                        )
+                    }
+
+                    Toggle(isOn: Binding(
                         get: { appLock.isEnabled },
                         set: { target in
                             Task {
@@ -208,7 +231,69 @@ struct SettingsSheet: View {
                     }
                 }
 
-                // 5. 账户操作
+                // 5. 签名证书与权限状态诊断
+                Section("签名与证书状态") {
+                    let info = AgySharedStore.provisioningInfo
+                    HStack {
+                        Text("Bundle ID")
+                            .font(.system(size: 14))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text(info.bundleId)
+                            .font(.system(size: 13, design: .monospaced))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                    }
+
+                    if let team = info.teamName ?? info.teamId {
+                        HStack {
+                            Text("签名团队")
+                                .font(.system(size: 14))
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Text(info.teamId != nil && info.teamName != nil ? "\(team) (\(info.teamId!))" : team)
+                                .font(.system(size: 13))
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                        }
+                    }
+
+                    if let exp = info.expirationDate {
+                        HStack {
+                            Text("证书到期")
+                                .font(.system(size: 14))
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Text(exp.formatted(date: .numeric, time: .omitted))
+                                .font(.system(size: 13, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    HStack {
+                        Text("共享容器")
+                            .font(.system(size: 14))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text(AgySharedStore.activeAppGroupDisplay)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(AgySharedStore.resolvedAppGroupId != nil ? Color.green : Color.secondary)
+                            .lineLimit(1)
+                    }
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            capTag("App Group", active: AgySharedStore.resolvedAppGroupId != nil)
+                            capTag("大内存上限", active: info.hasIncreasedMemory)
+                            capTag("时效通知", active: info.hasTimeSensitiveNotifications)
+                            capTag("Siri", active: info.hasSiri)
+                            capTag(info.isWildcard ? "通配符描述" : "显式描述", active: info.appIdentifier != nil)
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+
+                // 6. 账户操作
                 Section {
                     Button(role: .destructive) {
                         state.logout()
@@ -275,6 +360,20 @@ struct SettingsSheet: View {
                     .presentationDragIndicator(.visible)
             }
         }
+    }
+
+    private func capTag(_ title: String, active: Bool) -> some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(active ? Color.green : Color.gray.opacity(0.45))
+                .frame(width: 6, height: 6)
+            Text(title)
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(active ? .primary : .secondary)
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 4)
+        .background(Color(.tertiarySystemFill), in: Capsule())
     }
 
     private func settingsRow(title: String, icon: String, tint: Color, badge: String? = nil) -> some View {
